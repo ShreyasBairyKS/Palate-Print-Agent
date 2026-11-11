@@ -1,0 +1,47 @@
+000000  1b 40                              ESC @     initialise printer
+000002  1b 74 10                           ESC t     code page 16 WPC1252
+000005  1b 61 01                           ESC a     align centre
+000008  1b 45 01                           ESC E     bold on
+00000b  1d 42 01                           GS B      reverse (white on black) on
+00000e  20 44 55 50 4c 49 43 41 …+3        text      " DUPLICATE "
+000019  0a                                 LF        print and line feed
+00001a  1d 42 00                           GS B      reverse (white on black) off
+00001d  1b 45 00                           ESC E     bold off
+000020  1b 61 01                           ESC a     align centre
+000023  70 61 72 74 69 61 6c 20 …+17       text      "partial ticket on TANDOOR"
+00003c  0a                                 LF        print and line feed
+00003d  1b 61 01                           ESC a     align centre
+000040  1b 45 01                           ESC E     bold on
+000043  1d 42 01                           GS B      reverse (white on black) on
+000046  20 42 41 43 4b 55 50 20 …+12       text      " BACKUP FOR TANDOOR "
+00005a  0a                                 LF        print and line feed
+00005b  1d 42 00                           GS B      reverse (white on black) off
+00005e  1b 45 00                           ESC E     bold off
+000061  1b 61 01                           ESC a     align centre
+000064  1d 21 11                           GS !      character size 2x wide, 2x high
+000067  1b 45 01                           ESC E     bold on
+00006a  54 41 4e 44 4f 4f 52               text      "TANDOOR"
+000071  0a                                 LF        print and line feed
+000072  1b 45 00                           ESC E     bold off
+000075  1d 21 00                           GS !      character size 1x wide, 1x high
+000078  1b 61 00                           ESC a     align left
+00007b  54 61 62 6c 65 20 54 34 …+40       text      "Table T4                                   #1042"
+0000ab  0a                                 LF        print and line feed
+0000ac  31 31 20 4e 6f 76 20 32 …+9        text      "11 Nov 2026 14:05"
+0000bd  0a                                 LF        print and line feed
+0000be  2d 2d 2d 2d 2d 2d 2d 2d …+40       text      "------------------------------------------------"
+0000ee  0a                                 LF        print and line feed
+0000ef  1b 45 01                           ESC E     bold on
+0000f2  32 20 78 20 50 61 6e 65 …+8        text      "2 x Paneer Tikka"
+000102  0a                                 LF        print and line feed
+000103  1b 45 00                           ESC E     bold off
+000106  20 20 20 20 2d 20 6c 65 …+8        text      "    - less spicy"
+000116  0a                                 LF        print and line feed
+000117  1b 45 01                           ESC E     bold on
+00011a  31 20 78 20 42 75 74 74 …+7        text      "1 x Butter Naan"
+000129  0a                                 LF        print and line feed
+00012a  1b 45 00                           ESC E     bold off
+00012d  2d 2d 2d 2d 2d 2d 2d 2d …+40       text      "------------------------------------------------"
+00015d  0a                                 LF        print and line feed
+00015e  1b 64 03                           ESC d     print and feed 3 lines
+000161  1d 56 42 00                        GS V      feed 0 dots, then partial cut

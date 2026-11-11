@@ -4,9 +4,16 @@ The Palate print agent: a Go service on the restaurant's Windows till that
 polls Palate's cloud for print jobs and writes each station's ticket to its
 printer. The design is in `../Palate print agent design plan.md`.
 
-**Status: M2.**
+**Status: M3.**
 
-- **Crashes:** killing the agent process mid-write never loses a ticket or
+- **Hostile server:** every hostile mock flag ends in a correct recorded
+  outcome (`TestM3EveryHostileFlagEndsInARecordedOutcome`).
+- **Hanging printer:** its ticket reaches the backup within 15 s: 3.0 s for
+  a connect hang (`TestM3HangingPrinterReachesBackupWithin15s`), 10.0 s for
+  a full write stall (`queue.TestHangingPrinterReachesBackupWithin15s`).
+- **Silent till:** when a till stops answering, its jobs print on another
+  till with a MOVED FROM banner (`TestM3SilentTillsJobsPrintOnAnotherTill`).
+- **Crashes (M2):** killing the agent process mid-write never loses a ticket or
   prints one twice unmarked (`TestM2KillMidWrite`).
 - **Indian scripts:** a Kannada slip renders identically every time,
   including concurrently (`TestKannadaRendersIdenticallyTwice`).
@@ -31,8 +38,8 @@ is signed off.
 | `printer/` | wire | The `Writer` interface and failure kinds (refused, hang, partial, paper out) |
 | `printer/net/` | wire | Raw TCP 9100 writer with a DLE EOT status check |
 | `printer/usb/` | wire | Windows spooler writer, datatype RAW |
-| `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, report |
-| `agent/` | wire | The poll loop, health payload, and backoff with jitter |
+| `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, failure ladder to the backup, probing down printers, report |
+| `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
 | `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `version` |
 | `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder, fake printer, mock server |
@@ -40,6 +47,7 @@ is signed off.
 | `arch_test.go` | seam | `render`, `job`, `ledger`, `internal/dpapi` may not import `net`; `queue`, `printer/*`, `config` may not import `net/http` |
 | `e2e_test.go` | | The real agent against the mock server and fake printers |
 | `crash_test.go` | | Builds `palate-agent`, kills it mid-write, restarts it |
+| `m3_test.go` | | Hostile flags, a hanging printer to its backup, a silent till's jobs on another till |
 | `scripts/demo.sh` | | Demo: pair, test print, run, an order with a Kannada dish prints |
 | `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
 
@@ -103,7 +111,7 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
   "server": "https://api.palate.example",
   "agent_name": "front-till",
   "printers": [
-    {"id": "p-tandoor", "name": "Tandoor", "kind": "network", "address": "192.168.1.50", "width": 80},
+    {"id": "p-tandoor", "name": "Tandoor", "kind": "network", "address": "192.168.1.50", "width": 80, "backup": "p-pass"},
     {"id": "p-wok", "name": "Wok", "kind": "network", "address": "192.168.1.51:9100", "width": 58},
     {"id": "p-pass", "name": "Pass", "kind": "usb", "printer_name": "EPSON TM-T82 Receipt", "width": 80}
   ],
@@ -128,6 +136,9 @@ Config rules:
   printers installed for all users. `run` warns about any it can't see.
 - **Server:** must use https. Plain http is allowed only to a loopback address,
   for the mock.
+- **Backups:** `backup` names another printer on the same till, used when
+  this one is down. A backup on another till is the server's job (see the
+  till-not-answering rule below).
 - **Files:** the credential and the ledger are stored beside the config by
   default (`credential_file`, `ledger_file`).
 
@@ -138,6 +149,7 @@ Config rules:
 | `status_timeout` | 500ms | How long to wait for a DLE EOT reply |
 | `fast_retries` / `retry_gap` | 2 / 1s | Retries after a refused connection only |
 | `delayed_after` | 10m | Older jobs print with a DELAYED banner |
+| `probe_every` | 30s | How often a down network printer is checked |
 
 ### What happens to a ticket
 
@@ -168,33 +180,67 @@ Config rules:
    | Network | Printer confirms the status query | `printed` |
    | Network | No reply | `written` |
    | USB | Spooler took every byte | `written` (the spooler gives no paper status) |
-   | Either | Refused | Retried twice, then `failed` |
-   | Either | Hang, partial write or paper out | `failed` with the reason, no retry |
+   | Either | Refused | Retried twice, then the ladder (step 7) |
+   | Either | Hang, partial write or paper out | No retry; the ladder (step 7) |
 
-7. The ledger records Done with the outcome and flushes. Only then is the
+7. The failure ladder. A failed printer is marked down. If it has a backup on
+   this till, the ticket goes to the backup's own queue and prints there. Only
+   the backup's worker writes to it, because most printers drop a second
+   connection.
+   - **Banner:** the backup copy says "BACKUP FOR TANDOOR".
+   - **After a partial write:** the backup copy is also marked DUPLICATE
+     ("partial ticket on TANDOOR").
+   - **Outcome:** `fallback`, with the reason.
+   - **No backup, or the backup fails too:** `failed`, naming both printers.
+   - **While a printer is down:** its tickets go straight to the backup, with
+     no wait for another timeout. It is probed every 30 s, and a successful
+     probe or write brings it back. A down printer with no backup is still
+     tried, because it may have recovered.
+8. The ledger records Done with the outcome and flushes. Only then is the
    outcome reported, with retries. If the report is lost, the lease expires,
    the job comes back, and step 3 reports the stored outcome without
    printing.
 
+### When something gets stuck
+
+- **The poll loop:** the watchdog abandons a poll that outlives 55 s (the
+  hold time plus 30 s) and starts a fresh one. The restart count rides in
+  the health payload as `watchdog_restarts`.
+- **A till stops answering:** this is the server's rule; the mock implements
+  it. No poll for `2 x hold + 10 s` (60 s) and the till counts as not
+  answering.
+  - Its queued jobs move to their printers' backups on an answering till,
+    and print there with "MOVED FROM TANDOOR / check for duplicate".
+  - A job whose lease is still live is never moved.
+  - With no reachable backup, the server records the job as failed.
+  - If the original till reports the job later, the server keeps both
+    outcomes and raises a duplicate alert.
+- **A job the agent can't accept:** this is a poison job, such as an
+  oversized or cut-off response. After 5 deliveries with no outcome, the
+  server records it as failed and raises an alert.
+
 ## Known gaps (by milestone)
 
-- **M3:**
-  - The failure ladder (backup printers, alerts) and the till-not-answering
-    rule. Today a dead printer's tickets end as recorded failures.
-  - MOVED FROM jobs from the server.
-  - The watchdog.
+- **Not covered yet:**
+  - A printer that dies while its till stays up, when its backup is on
+    another till. The agent can only use backups on its own till, and the
+    server moves jobs only when a whole till goes silent, so today that
+    ticket is a recorded failure. It needs a way for the agent to hand a job
+    back to the server (`backend-notes.md`).
   - USB spooler job status: the spooler accepts jobs for an unplugged printer.
   - Small tickets to a stalled network printer show as `written`, because
     socket buffers accept them. A big one shows as `partial`.
 - **M4:**
   - The Windows service, the signed MSI and update verification. Today `run`
-    is a foreground command.
+    is a foreground command; Windows will restart a crashed service.
   - Raster speed and legibility on real printers.
 - **Owner to confirm:**
   - LocalSystem as the service account. It's assumed for now and nothing in
     the code depends on it.
   - Reprinting as DUPLICATE (rather than reporting `failed`) after a crash
     mid-write.
+  - The timings: lease 60 s, not answering 60 s, probe 30 s, poison job
+    after 5 deliveries.
 
 ## The rig
 
@@ -239,7 +285,8 @@ bin/mockpalate -seed demo
 ```
 
 Serves on `127.0.0.1:8080` with a 25 s hold and a 60 s lease, and prints a
-pairing code for restaurant `demo`.
+pairing code for restaurant `demo`. `-not-answering` and `-max-deliveries`
+tune the server-side rules.
 
 **Agent endpoints (provisional):**
 
@@ -263,6 +310,12 @@ What the mock already enforces:
   to 5 failed attempts per minute per address.
 - **Rotation:** the new credential arrives in a poll response. The old one
   works until the new one is first used.
+- **Till not answering:** a silent till's queued jobs move to backups set with
+  `PUT /mock/backups`. A live lease is never moved.
+- **Poison jobs:** a job with 5 deliveries and no outcome is recorded as failed
+  by the server.
+- **Alerts:** moves, server-recorded failures and late duplicate reports are
+  listed in `GET /mock/state` under `alerts`.
 
 **Control endpoints** (mock only):
 
@@ -274,17 +327,19 @@ What the mock already enforces:
 | `PUT /mock/hostile` | `{"flags":["repeat-id"]}`; an empty list clears them |
 | `POST /mock/devices/{id}/revoke` | none |
 | `POST /mock/devices/{id}/rotate` | none |
+| `PUT /mock/backups` | `{"backups":{"p-tandoor":"p-wok"}}`: printer to backup printer, across tills |
 
-**Hostile flags** (`-hostile a,b`, or `PUT /mock/hostile`):
+**Hostile flags** (`-hostile a,b`, or `PUT /mock/hostile`). Each ends in the
+recorded outcome shown (`TestM3EveryHostileFlagEndsInARecordedOutcome`).
 
-| Flag | What the server does | What the agent does |
-| --- | --- | --- |
-| `ip-in-job` | Adds `printer_address` to each job | Refuses the job and reports it `failed` |
-| `raw-bytes` | Adds `raw` printer bytes to each job | Refuses the job and reports it `failed` |
-| `huge-payload` | Pads the poll response to about 50 MB | Stops at 1 MiB and backs off |
-| `drop-midway` | Sends half the response, then closes | Backs off and retries; the job comes back after the lease |
-| `short-lease` | Leases for 2 s | Prints once: a repeat while queued is ignored, and the ledger stops a reprint after Done |
-| `repeat-id` | Sends each job twice in one response | Prints once |
+| Flag | What the server does | What the agent does | Recorded outcome |
+| --- | --- | --- | --- |
+| `ip-in-job` | Adds `printer_address` to each job | Refuses the job | `failed`, by the agent |
+| `raw-bytes` | Adds `raw` printer bytes to each job | Refuses the job | `failed`, by the agent |
+| `huge-payload` | Pads the poll response to about 50 MB | Stops reading at 1 MiB and backs off | `failed`, by the server after 5 deliveries |
+| `drop-midway` | Sends half the response, then closes | Backs off and retries | `failed`, by the server after 5 deliveries |
+| `short-lease` | Leases for 2 s, shorter than a slow print | Ignores the redelivery while printing; the ledger stops any reprint | `written`, one copy on paper |
+| `repeat-id` | Sends each job twice in one response | Prints it once | `printed`, one copy on paper |
 
 ## Provisional: what changes when the missing documents arrive
 

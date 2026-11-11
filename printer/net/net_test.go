@@ -128,6 +128,27 @@ func TestCancelStopsTheWrite(t *testing.T) {
 	}
 }
 
+func TestProbe(t *testing.T) {
+	ok, _ := fake(t, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
+	if err := fast(ok).Probe(context.Background()); err != nil {
+		t.Fatalf("healthy printer: %v", err)
+	}
+	silent, _ := fake(t, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusNone})
+	if err := fast(silent).Probe(context.Background()); err != nil {
+		t.Fatalf("printer that never answers status: %v; reachable counts as up", err)
+	}
+	paper, _ := fake(t, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusPaperOut})
+	if err := fast(paper).Probe(context.Background()); err == nil {
+		t.Fatal("paper-out printer probed as up")
+	}
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	gone := ln.Addr().String()
+	ln.Close()
+	if err := fast(gone).Probe(context.Background()); err == nil {
+		t.Fatal("nothing listening, probed as up")
+	}
+}
+
 func TestPaperOutReplyDecoding(t *testing.T) {
 	cases := map[byte]bool{0x12: false, 0x72: true, 0x1E: false, 0xFF: false, 0x60: false}
 	for b, want := range cases {

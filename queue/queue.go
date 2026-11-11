@@ -5,9 +5,21 @@
 // Every write goes through the printed-ID ledger (package ledger), so a crash
 // never prints a ticket twice unmarked and never loses one silently.
 //
-// There is no failure ladder yet: a failed write ends in a recorded failure
-// with a reason. Backup printers arrive in M3. Nothing here may import
-// net/http (arch_test.go checks).
+// The failure ladder, for each ticket:
+//
+//  1. Primary up: print there. A refused connection is retried twice.
+//  2. Primary failed or already down, and it has a backup on this till: the
+//     ticket is handed to the backup's own queue (most printers accept one
+//     connection at a time, so only the backup's worker writes to it) and
+//     prints there with a BACKUP FOR banner. Outcome: fallback, with why.
+//     A partial write on the primary also marks the backup copy DUPLICATE.
+//  3. No backup, or the backup fails too: a recorded failure with the reason.
+//
+// A printer is marked down after a hang, a partial write, paper out, or a
+// refused connection that survives the retries. While it is down its tickets
+// go straight to the backup, and it is probed every 30 s until it answers.
+//
+// Nothing here may import net/http (arch_test.go checks).
 package queue
 
 import (
@@ -31,6 +43,7 @@ type Printer struct {
 	Name   string
 	Width  job.Width
 	Writer printer.Writer
+	Backup string // id of another printer on this till, or ""
 }
 
 // Reporter records outcomes. source.JobSource satisfies it.
@@ -52,6 +65,7 @@ type Config struct {
 	FastRetries    int            // retries after a refused connection; default 2
 	RetryGap       time.Duration  // default 1s
 	DelayedAfter   time.Duration  // DELAYED banner past this age; default 10m
+	ProbeEvery     time.Duration  // how often a down printer is checked; default 30s
 	ReportAttempts int            // tries to report an outcome; default 5
 	Location       *time.Location // order times are printed in this zone; default time.Local
 	Now            func() time.Time
@@ -75,18 +89,33 @@ type Queue struct {
 	reporter Reporter
 	workers  map[string]*worker
 	wg       sync.WaitGroup
+	ctx      context.Context
 
 	mu      sync.Mutex
 	pending map[string]bool // job ids queued or printing
 }
 
+// task is a job waiting in a worker's queue. handoff is set when a down
+// primary passed it to this printer as its backup.
+type task struct {
+	j       job.Job
+	handoff *handoff
+}
+
+type handoff struct {
+	from    Printer
+	reason  string
+	partial bool // the primary may hold a fragment of this ticket
+}
+
 type worker struct {
-	p    Printer
-	mu   sync.Mutex
-	jobs []job.Job
-	busy bool
-	wake chan struct{}
-	st   State
+	p       Printer
+	mu      sync.Mutex
+	tasks   []task
+	busy    bool
+	wake    chan struct{}
+	st      State
+	probing bool
 }
 
 func New(printers []Printer, reporter Reporter, cfg Config) *Queue {
@@ -101,6 +130,9 @@ func New(printers []Printer, reporter Reporter, cfg Config) *Queue {
 	}
 	if cfg.DelayedAfter == 0 {
 		cfg.DelayedAfter = 10 * time.Minute
+	}
+	if cfg.ProbeEvery == 0 {
+		cfg.ProbeEvery = 30 * time.Second
 	}
 	if cfg.ReportAttempts == 0 {
 		cfg.ReportAttempts = 5
@@ -118,11 +150,20 @@ func New(printers []Printer, reporter Reporter, cfg Config) *Queue {
 	for _, p := range printers {
 		q.workers[p.ID] = &worker{p: p, wake: make(chan struct{}, 1), st: State{ID: p.ID, State: "unknown"}}
 	}
+	for _, p := range printers {
+		if p.Backup == "" {
+			continue
+		}
+		if _, ok := q.workers[p.Backup]; !ok || p.Backup == p.ID {
+			panic(fmt.Sprintf("queue: printer %q has backup %q, which is not another printer on this till", p.ID, p.Backup))
+		}
+	}
 	return q
 }
 
 // Start runs the workers until ctx is done. Wait returns once they stop.
 func (q *Queue) Start(ctx context.Context) {
+	q.ctx = ctx
 	for _, w := range q.workers {
 		q.wg.Add(1)
 		go func() {
@@ -155,8 +196,12 @@ func (q *Queue) Submit(ctx context.Context, j job.Job) {
 		}()
 		return
 	}
+	w.push(task{j: j})
+}
+
+func (w *worker) push(t task) {
 	w.mu.Lock()
-	w.jobs = append(w.jobs, j)
+	w.tasks = append(w.tasks, t)
 	w.mu.Unlock()
 	select {
 	case w.wake <- struct{}{}:
@@ -175,7 +220,7 @@ func (q *Queue) Depth() int {
 	n := 0
 	for _, w := range q.workers {
 		w.mu.Lock()
-		n += len(w.jobs)
+		n += len(w.tasks)
 		if w.busy {
 			n++
 		}
@@ -198,7 +243,7 @@ func (q *Queue) States() []State {
 func (q *Queue) run(ctx context.Context, w *worker) {
 	for {
 		w.mu.Lock()
-		if len(w.jobs) == 0 {
+		if len(w.tasks) == 0 {
 			w.mu.Unlock()
 			select {
 			case <-w.wake:
@@ -207,37 +252,60 @@ func (q *Queue) run(ctx context.Context, w *worker) {
 				return
 			}
 		}
-		j := w.jobs[0]
-		w.jobs = w.jobs[1:]
+		t := w.tasks[0]
+		w.tasks = w.tasks[1:]
 		w.busy = true
 		w.mu.Unlock()
 
-		o, report := q.process(ctx, w, j)
+		o, next := q.process(ctx, w, t)
 
 		w.mu.Lock()
 		w.busy = false
 		w.mu.Unlock()
-		if report {
-			q.report(ctx, j.ID, o)
+		switch next {
+		case stepReport:
+			q.report(ctx, t.j.ID, o)
+			q.done(t.j.ID)
+		case stepStopping:
+			q.done(t.j.ID)
+		case stepHandedOff:
+			// The backup's worker reports it.
 		}
-		q.done(j.ID)
 		if ctx.Err() != nil {
 			return
 		}
 	}
 }
 
-// process takes one job through the ledger, the renderer and the printer.
-// It returns the outcome and whether to report it (not when the agent is
-// stopping mid-job: the lease expires and the job comes back).
-func (q *Queue) process(ctx context.Context, w *worker, j job.Job) (job.Outcome, bool) {
-	prior, seen := q.cfg.Ledger.Get(j.ID)
-	if seen && prior.State == ledger.Done {
-		// Printed (or failed) before; the report was lost. Report it again.
-		q.cfg.Log.Info("job already done; reporting the stored outcome again", "job", j.ID, "outcome", prior.Outcome.Kind)
-		return prior.Outcome, true
+type nextStep int
+
+const (
+	stepReport    nextStep = iota // report the outcome
+	stepStopping                  // agent stopping mid-job: don't report; the lease brings it back
+	stepHandedOff                 // passed to the backup printer's queue
+)
+
+// process takes one task through the ledger, the renderer and the printer.
+func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, nextStep) {
+	j, h := t.j, t.handoff
+	var notes []string
+
+	recovering := false
+	if h == nil {
+		prior, seen := q.cfg.Ledger.Get(j.ID)
+		if seen && prior.State == ledger.Done {
+			// Printed (or failed) before; the report was lost. Report it again.
+			q.cfg.Log.Info("job already done; reporting the stored outcome again", "job", j.ID, "outcome", prior.Outcome.Kind)
+			return prior.Outcome, stepReport
+		}
+		recovering = seen && prior.State == ledger.Attempting
+
+		// A down printer with a backup sends its tickets straight there.
+		if w.down() && w.p.Backup != "" {
+			q.handOff(w, t, "printer marked down ("+w.lastError()+")", false)
+			return job.Outcome{}, stepHandedOff
+		}
 	}
-	recovering := seen && prior.State == ledger.Attempting
 
 	slip := j.Slip
 	slip.PlacedAt = slip.PlacedAt.In(q.cfg.Location)
@@ -249,7 +317,15 @@ func (q *Queue) process(ctx context.Context, w *worker, j job.Job) (job.Outcome,
 		// paper, so it prints again, marked so the kitchen can tell.
 		slip.Duplicate = true
 		slip.DuplicateReason = CrashRecovery
+		notes = append(notes, CrashRecovery)
 		q.cfg.Log.Warn("job was mid-write when the agent stopped; printing again as DUPLICATE", "job", j.ID)
+	}
+	if h != nil {
+		slip.FallbackFrom = h.from.Name
+		if h.partial {
+			slip.Duplicate = true
+			slip.DuplicateReason = "partial ticket on " + strings.ToUpper(h.from.Name)
+		}
 	}
 
 	data, err := render.Render(slip, w.p.Width)
@@ -257,33 +333,49 @@ func (q *Queue) process(ctx context.Context, w *worker, j job.Job) (job.Outcome,
 		q.cfg.Log.Error("render failed", "job", j.ID, "printer", w.p.ID, "err", err)
 		o := job.Outcome{Kind: job.Failed, Reason: err.Error()}
 		q.finish(j.ID, o)
-		return o, true
+		return o, stepReport
 	}
 
 	// The ledger record must be on disk before the first byte goes out. If
 	// the ledger can't be written, print anyway (paper keeps flowing) and say
 	// so in the outcome: a crash now could print this job twice.
-	var notes []string
-	if recovering {
-		notes = append(notes, CrashRecovery)
-	}
 	if err := q.cfg.Ledger.Begin(j.ID); err != nil {
 		q.cfg.Log.Error("ledger write failed; printing anyway", "job", j.ID, "err", err)
 		notes = append(notes, "ledger unavailable, a crash could print this twice")
 	}
 
-	o := q.write(ctx, w, j.ID, data)
+	o, werr := q.write(ctx, w, j.ID, data)
 	if ctx.Err() != nil {
 		// Stopping mid-job: the ledger still says Attempting, so if it comes
 		// back after the lease it prints as a marked duplicate.
-		return o, false
+		return o, stepStopping
+	}
+
+	switch {
+	case werr != nil && h == nil && w.p.Backup != "":
+		// Next rung of the ladder. The ledger stays at Attempting until the
+		// backup finishes, which is right: if the agent dies now, the job
+		// comes back as a marked duplicate.
+		q.handOff(w, t, fmt.Sprintf("%v", werr), printer.KindOf(werr) == printer.Partial)
+		return job.Outcome{}, stepHandedOff
+	case h != nil && werr == nil:
+		o = job.Outcome{Kind: job.Fallback, PrinterID: w.p.ID,
+			Reason: fmt.Sprintf("printed on backup %s (%s): primary %s (%s): %s", w.p.Name, w.p.ID, h.from.Name, h.from.ID, h.reason)}
+	case h != nil:
+		o = job.Outcome{Kind: job.Failed,
+			Reason: fmt.Sprintf("primary %s (%s): %s; backup %s (%s): %v", h.from.Name, h.from.ID, h.reason, w.p.Name, w.p.ID, werr)}
 	}
 	if len(notes) > 0 {
-		notes = append(notes, o.Reason)
-		o.Reason = strings.Trim(strings.Join(notes, "; "), "; ")
+		o.Reason = strings.Trim(strings.Join(append(notes, o.Reason), "; "), "; ")
 	}
 	q.finish(j.ID, o)
-	return o, true
+	return o, stepReport
+}
+
+func (q *Queue) handOff(w *worker, t task, reason string, partial bool) {
+	b := q.workers[w.p.Backup]
+	q.cfg.Log.Warn("printer down; sending ticket to its backup", "job", t.j.ID, "printer", w.p.ID, "backup", b.p.ID, "reason", reason)
+	b.push(task{j: t.j, handoff: &handoff{from: w.p, reason: reason, partial: partial}})
 }
 
 func (q *Queue) finish(id string, o job.Outcome) {
@@ -292,24 +384,25 @@ func (q *Queue) finish(id string, o job.Outcome) {
 	}
 }
 
-// write sends the bytes, retrying only fast failures.
-func (q *Queue) write(ctx context.Context, w *worker, id string, data []byte) job.Outcome {
+// write sends the bytes, retrying only fast failures. On failure it marks the
+// printer down and returns the outcome and the error.
+func (q *Queue) write(ctx context.Context, w *worker, id string, data []byte) (job.Outcome, error) {
 	var lastErr error
 	for attempt := 0; attempt <= q.cfg.FastRetries; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-time.After(q.cfg.RetryGap):
 			case <-ctx.Done():
-				return job.Outcome{Kind: job.Failed, Reason: "agent stopping"}
+				return job.Outcome{Kind: job.Failed, Reason: "agent stopping"}, ctx.Err()
 			}
 		}
 		res, err := w.p.Writer.Write(ctx, data)
 		if err == nil {
 			q.setState(w, "up", "")
 			if res.Confirmed {
-				return job.Outcome{Kind: job.Printed, PrinterID: w.p.ID}
+				return job.Outcome{Kind: job.Printed, PrinterID: w.p.ID}, nil
 			}
-			return job.Outcome{Kind: job.Written, PrinterID: w.p.ID}
+			return job.Outcome{Kind: job.Written, PrinterID: w.p.ID}, nil
 		}
 		lastErr = err
 		kind := printer.KindOf(err)
@@ -318,8 +411,20 @@ func (q *Queue) write(ctx context.Context, w *worker, id string, data []byte) jo
 			break // hang, partial and paper out are never retried on the same printer
 		}
 	}
-	q.setState(w, "down", printer.KindOf(lastErr).String())
-	return job.Outcome{Kind: job.Failed, Reason: fmt.Sprintf("printer %s (%s): %v", w.p.Name, w.p.ID, lastErr)}
+	q.markDown(w, printer.KindOf(lastErr).String())
+	return job.Outcome{Kind: job.Failed, Reason: fmt.Sprintf("printer %s (%s): %v", w.p.Name, w.p.ID, lastErr)}, lastErr
+}
+
+func (w *worker) down() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.st.State == "down"
+}
+
+func (w *worker) lastError() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.st.LastError
 }
 
 func (q *Queue) setState(w *worker, state, lastErr string) {
@@ -329,6 +434,54 @@ func (q *Queue) setState(w *worker, state, lastErr string) {
 		w.st.LastError = lastErr
 	}
 	w.mu.Unlock()
+}
+
+// markDown records the printer as down and starts probing it.
+func (q *Queue) markDown(w *worker, lastErr string) {
+	w.mu.Lock()
+	w.st.State = "down"
+	w.st.LastError = lastErr
+	start := !w.probing && q.ctx != nil
+	if start {
+		w.probing = true
+	}
+	w.mu.Unlock()
+	if start {
+		go q.probe(w)
+	}
+}
+
+// probe checks a down printer every ProbeEvery until it answers. A printer
+// that can't be probed (USB) goes back to "unknown" after one interval, so
+// the next ticket tries it again.
+func (q *Queue) probe(w *worker) {
+	defer func() {
+		w.mu.Lock()
+		w.probing = false
+		w.mu.Unlock()
+	}()
+	t := time.NewTicker(q.cfg.ProbeEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-q.ctx.Done():
+			return
+		case <-t.C:
+		}
+		if !w.down() {
+			return // a write succeeded meanwhile
+		}
+		p, ok := w.p.Writer.(printer.Prober)
+		if !ok {
+			q.setState(w, "unknown", "")
+			return
+		}
+		if err := p.Probe(q.ctx); err == nil {
+			q.cfg.Log.Info("printer answering again", "printer", w.p.ID)
+			q.setState(w, "up", "")
+			return
+		}
+	}
 }
 
 // report sends an outcome, retrying with backoff. If every attempt fails the

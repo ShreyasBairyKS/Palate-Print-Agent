@@ -56,6 +56,8 @@ type Health struct {
 	LastError    string          `json:"last_error,omitempty"` // an error code, never slip contents
 	Printers     []PrinterHealth `json:"printers"`
 	BadVersion   string          `json:"bad_version,omitempty"` // an update that was reverted
+	// WatchdogRestarts counts poll loops the watchdog had to restart.
+	WatchdogRestarts int `json:"watchdog_restarts,omitempty"`
 }
 
 type PrinterHealth struct {

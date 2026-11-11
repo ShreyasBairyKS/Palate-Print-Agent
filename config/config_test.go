@@ -60,7 +60,7 @@ func TestLoad(t *testing.T) {
 	os.WriteFile(path, []byte(`{
 		"server": "http://127.0.0.1:8080",
 		"agent_name": "till-1",
-		"printers": [{"id":"p1","name":"Tandoor","kind":"network","address":"192.168.1.50","width":80},
+		"printers": [{"id":"p1","name":"Tandoor","kind":"network","address":"192.168.1.50","width":80,"backup":"p2"},
 		             {"id":"p2","name":"Pass","kind":"usb","printer_name":"EPSON TM-T82 Receipt","width":58}],
 		"timings": {"stall_timeout": "4s"}
 	}`), 0o644)
@@ -88,6 +88,8 @@ func TestLoadRejects(t *testing.T) {
 		"usb with addr":  `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"usb","printer_name":"EPSON","address":"10.0.0.1","width":80}]}`,
 		"net with name":  `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","printer_name":"EPSON","address":"10.0.0.1","width":80}]}`,
 		"no printers":    `{"server":"https://x","printers":[]}`,
+		"backup self":    `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80,"backup":"p1"}]}`,
+		"backup missing": `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80,"backup":"p9"}]}`,
 		"unknown field":  `{"server":"https://x","credential":"plaintext!","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80}]}`,
 		"bad duration":   `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80}],"timings":{"retry_gap":5}}`,
 	}

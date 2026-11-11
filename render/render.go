@@ -88,6 +88,9 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 		b.Write(cmdAlignCentre)
 		r.text("check for duplicate")
 	}
+	if slip.FallbackFrom != "" {
+		r.banner("BACKUP FOR " + strings.ToUpper(slip.FallbackFrom))
+	}
 	if slip.Delayed {
 		r.banner("DELAYED")
 	}
@@ -217,6 +220,7 @@ func checkSlip(s job.Slip) error {
 	fields := []struct{ name, text string }{
 		{"station", s.Station}, {"table", s.Table}, {"order_number", s.OrderNumber},
 		{"notes", s.Notes}, {"duplicate_reason", s.DuplicateReason}, {"moved_from", s.MovedFrom},
+		{"fallback_from", s.FallbackFrom},
 	}
 	for i, it := range s.Items {
 		fields = append(fields,

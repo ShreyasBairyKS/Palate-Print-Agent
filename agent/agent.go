@@ -22,23 +22,36 @@ import (
 	netprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/net"
 	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/queue"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/source"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/source/cloud"
 )
 
 // Version is reported in every poll's health payload.
-const Version = "0.2.0-m2"
+const Version = "0.3.0-m3"
+
+// Source is where the agent gets jobs: the cloud client, or a fake in tests.
+type Source interface {
+	source.JobSource
+	RegisterPrinters(ctx context.Context, printers []api.Printer) error
+}
 
 // Agent is a configured, runnable agent.
 type Agent struct {
-	Cloud  *cloud.Client
+	Cloud  Source
 	Queue  *queue.Queue
 	Ledger *ledger.Ledger
 	Log    *slog.Logger
+	// Watchdog is the longest one poll may take before the watchdog abandons
+	// it and starts a fresh one. A poll has its own timeout (hold + 15 s), so
+	// this only fires on a bug or a call that ignores cancellation.
+	// Default 25 s hold + 30 s.
+	Watchdog time.Duration
 
 	printers []api.Printer
 
-	mu      sync.Mutex
-	lastErr string
+	mu       sync.Mutex
+	lastErr  string
+	restarts int
 }
 
 // New builds an agent from a validated config and a credential store, and
@@ -54,15 +67,17 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 	a := &Agent{Log: log, Ledger: led}
 	var qps []queue.Printer
 	for _, p := range cfg.Printers {
-		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Writer: WriterFor(p, cfg.Timings)})
+		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Writer: WriterFor(p, cfg.Timings), Backup: p.Backup})
 		a.printers = append(a.printers, api.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Width: p.Width})
 	}
-	a.Cloud = &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log}
-	a.Queue = queue.New(qps, a.Cloud, queue.Config{
+	cl := &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log}
+	a.Cloud = cl
+	a.Queue = queue.New(qps, cl, queue.Config{
 		Ledger:       led,
 		FastRetries:  cfg.Timings.FastRetries,
 		RetryGap:     cfg.Timings.RetryGap.D(),
 		DelayedAfter: cfg.Timings.DelayedAfter.D(),
+		ProbeEvery:   cfg.Timings.ProbeEvery.D(),
 		Log:          log,
 	})
 	return a, nil
@@ -143,7 +158,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	b.reset()
 
 	for ctx.Err() == nil {
-		jobs, err := a.Cloud.Fetch(ctx)
+		jobs, err := a.fetchWatched(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -169,6 +184,44 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
+var errStalled = errors.New("watchdog: poll stalled; abandoned it and started a fresh one")
+
+// fetchWatched runs one poll under the watchdog. A poll that outlives the
+// watchdog's limit is cancelled and abandoned: its goroutine may linger, but
+// the loop carries on. Jobs a stuck poll later returns are dropped; their
+// leases expire and they are delivered again.
+func (a *Agent) fetchWatched(ctx context.Context) ([]job.Job, error) {
+	limit := a.Watchdog
+	if limit == 0 {
+		limit = 55 * time.Second
+	}
+	fctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		jobs []job.Job
+		err  error
+	}
+	done := make(chan result, 1) // buffered: an abandoned poll can still finish
+	go func() {
+		j, err := a.Cloud.Fetch(fctx)
+		done <- result{j, err}
+	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case r := <-done:
+		return r.jobs, r.err
+	case <-timer.C:
+		a.mu.Lock()
+		a.restarts++
+		a.mu.Unlock()
+		a.Log.Error("watchdog: poll loop stalled; restarting it", "limit", limit)
+		return nil, errStalled
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 func (a *Agent) setErr(err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -186,9 +239,9 @@ func (a *Agent) setErr(err error) {
 // health is sent with every poll. It carries no customer data.
 func (a *Agent) health() api.Health {
 	a.mu.Lock()
-	lastErr := a.lastErr
+	lastErr, restarts := a.lastErr, a.restarts
 	a.mu.Unlock()
-	h := api.Health{AgentVersion: Version, QueueDepth: a.Queue.Depth(), LastError: lastErr}
+	h := api.Health{AgentVersion: Version, QueueDepth: a.Queue.Depth(), LastError: lastErr, WatchdogRestarts: restarts}
 	for _, s := range a.Queue.States() {
 		h.Printers = append(h.Printers, api.PrinterHealth{ID: s.ID, State: s.State, LastError: s.LastError})
 	}

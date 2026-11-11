@@ -14,6 +14,12 @@ type Writer interface {
 	Write(ctx context.Context, data []byte) (Result, error)
 }
 
+// Prober is implemented by writers that can check a printer is reachable
+// without printing anything. The queue uses it to bring a down printer back.
+type Prober interface {
+	Probe(ctx context.Context) error
+}
+
 // Result describes a successful write.
 type Result struct {
 	// Confirmed is true when the printer answered a status query after the

@@ -93,6 +93,34 @@ func (w *Writer) Write(ctx context.Context, data []byte) (printer.Result, error)
 	return printer.Result{Confirmed: true}, nil
 }
 
+// Probe checks the printer accepts a connection, without printing: it
+// connects and, if the printer answers a status query, checks for paper.
+var _ printer.Prober = (*Writer)(nil)
+
+func (w *Writer) Probe(ctx context.Context) error {
+	connectTimeout := orDefault(w.ConnectTimeout, 3*time.Second)
+	dial := w.Dial
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	dctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	conn, err := dial(dctx, "tcp", w.Addr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(orDefault(w.StatusTimeout, 500*time.Millisecond)))
+	if _, err := conn.Write(statusQuery); err != nil {
+		return err
+	}
+	reply := make([]byte, 1)
+	if n, _ := conn.Read(reply); n == 1 && paperOut(reply[0]) {
+		return errors.New("printer reports paper end")
+	}
+	return nil
+}
+
 // paperOut reads a DLE EOT 4 reply: bits 5 and 6 set mean paper end.
 // A valid reply always has bits 1 and 4 set and bits 0 and 7 clear.
 func paperOut(b byte) bool {

@@ -68,6 +68,12 @@ type Config struct {
 	Hold           time.Duration // how long a poll is held open with no jobs (default 25 s)
 	Lease          time.Duration // how long a fetched job is leased (default 60 s)
 	PairingCodeTTL time.Duration // default 10 min
+	// NotAnswering is how long without a poll before a till counts as not
+	// answering and its jobs move to backups. Default 2 x Hold + 10 s.
+	NotAnswering time.Duration
+	// MaxDeliveries is how many times a job is leased without an outcome
+	// before the server records it as failed (a poison job). Default 5.
+	MaxDeliveries int
 }
 
 type jobState string
@@ -100,7 +106,12 @@ type serverJob struct {
 	LeaseUntil time.Time
 	Deliveries int
 	Outcome    *api.OutcomeRequest
+	RecordedBy string // "agent" or "server"
 	Reports    int
+	// Set when the server moved the job because its till stopped answering.
+	MovedFrom     string              // original printer id
+	MovedFromTill string              // original device id
+	LateOutcome   *api.OutcomeRequest // the original till reported after the move
 }
 
 type pairingCode struct {
@@ -119,6 +130,8 @@ type Server struct {
 	jobs      map[string]*serverJob
 	jobOrder  []string
 	hostile   map[Flag]bool
+	backups   map[string]string      // printer id -> backup printer id (the portal's mapping)
+	alerts    []string               // what the floor would be shown
 	failedPar map[string][]time.Time // pairing failures by remote IP
 	wake      chan struct{}          // closed and replaced when jobs become available
 	seq       int
@@ -137,6 +150,12 @@ func New(cfg Config) *Server {
 	if cfg.PairingCodeTTL == 0 {
 		cfg.PairingCodeTTL = 10 * time.Minute
 	}
+	if cfg.NotAnswering == 0 {
+		cfg.NotAnswering = 2*cfg.Hold + 10*time.Second
+	}
+	if cfg.MaxDeliveries == 0 {
+		cfg.MaxDeliveries = 5
+	}
 	s := &Server{
 		cfg:       cfg,
 		codes:     map[string]pairingCode{},
@@ -144,6 +163,7 @@ func New(cfg Config) *Server {
 		byCred:    map[string]*device{},
 		jobs:      map[string]*serverJob{},
 		hostile:   map[Flag]bool{},
+		backups:   map[string]string{},
 		failedPar: map[string][]time.Time{},
 		wake:      make(chan struct{}),
 		stop:      make(chan struct{}),
@@ -161,6 +181,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("PUT /mock/hostile", s.handleHostile)
 	s.mux.HandleFunc("POST /mock/devices/{id}/revoke", s.handleRevoke)
 	s.mux.HandleFunc("POST /mock/devices/{id}/rotate", s.handleRotate)
+	s.mux.HandleFunc("PUT /mock/backups", s.handleBackups)
 
 	go s.expireLeases()
 	return s
@@ -214,9 +235,23 @@ func (s *Server) broadcastLocked() {
 	s.wake = make(chan struct{})
 }
 
-// expireLeases returns unreported jobs to the queue when their lease ends.
+// SetBackups replaces the printer -> backup printer mapping (in production,
+// set per station in the portal).
+func (s *Server) SetBackups(m map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.backups = map[string]string{}
+	for k, v := range m {
+		s.backups[k] = v
+	}
+}
+
+// expireLeases runs the server's housekeeping every 50 ms:
+//   - a lease that ends returns its job to the queue, unless the job has been
+//     delivered MaxDeliveries times, when the server records it as failed;
+//   - a till that stopped answering has its queued jobs moved to backups.
 func (s *Server) expireLeases() {
-	t := time.NewTicker(200 * time.Millisecond)
+	t := time.NewTicker(50 * time.Millisecond)
 	defer t.Stop()
 	for {
 		select {
@@ -224,20 +259,86 @@ func (s *Server) expireLeases() {
 			return
 		case now := <-t.C:
 			s.mu.Lock()
-			expired := false
-			for _, j := range s.jobs {
-				if j.State == leased && now.After(j.LeaseUntil) {
-					j.State = queued
-					j.LeasedTo = ""
-					expired = true
+			changed := false
+			for _, id := range s.jobOrder {
+				j := s.jobs[id]
+				if j.State != leased || !now.After(j.LeaseUntil) {
+					continue
 				}
+				changed = true
+				j.LeasedTo = ""
+				if j.Deliveries >= s.cfg.MaxDeliveries {
+					j.State = done
+					j.RecordedBy = "server"
+					j.Outcome = &api.OutcomeRequest{Kind: "failed",
+						Reason: fmt.Sprintf("server: delivered %d times with no outcome; the agent could not accept this job", j.Deliveries)}
+					s.alerts = append(s.alerts, fmt.Sprintf("%s: %s", id, j.Outcome.Reason))
+					continue
+				}
+				j.State = queued
 			}
-			if expired {
+			if s.moveFromSilentTillsLocked(now) {
+				changed = true
+			}
+			if changed {
 				s.broadcastLocked()
 			}
 			s.mu.Unlock()
 		}
 	}
+}
+
+// moveFromSilentTillsLocked applies the till-not-answering rule: a till with
+// no poll for NotAnswering has its queued jobs moved to their printers'
+// backups on a till that is answering. A job whose lease is still live is
+// never moved. With no reachable backup the job is a recorded failure.
+func (s *Server) moveFromSilentTillsLocked(now time.Time) bool {
+	answering := func(d *device) bool {
+		return d != nil && !d.Revoked && !d.LastPoll.IsZero() && now.Sub(d.LastPoll) < s.cfg.NotAnswering
+	}
+	owner := map[string]*device{} // printer id -> device, per restaurant below
+	names := map[string]string{}
+	changed := false
+	for _, id := range s.jobOrder {
+		j := s.jobs[id]
+		if j.State != queued {
+			continue
+		}
+		for k := range owner {
+			delete(owner, k)
+		}
+		for _, d := range s.devices {
+			if d.Restaurant != j.Restaurant {
+				continue
+			}
+			for _, p := range d.Printers {
+				owner[p.ID] = d
+				names[p.ID] = p.Name
+			}
+		}
+		d := owner[j.Job.PrinterID]
+		if d == nil || d.LastPoll.IsZero() || answering(d) {
+			continue // owned by a till that is answering, or that never polled yet
+		}
+		changed = true
+		from := j.Job.PrinterID
+		backup := s.backups[from]
+		bd := owner[backup]
+		if backup == "" || !answering(bd) {
+			j.State = done
+			j.RecordedBy = "server"
+			j.Outcome = &api.OutcomeRequest{Kind: "failed",
+				Reason: fmt.Sprintf("server: till %s not answering and printer %s has no backup on an answering till", d.ID, from)}
+			s.alerts = append(s.alerts, fmt.Sprintf("%s: %s", id, j.Outcome.Reason))
+			continue
+		}
+		j.MovedFrom = from
+		j.MovedFromTill = d.ID
+		j.Job.PrinterID = backup
+		j.Job.Slip.MovedFrom = names[from]
+		s.alerts = append(s.alerts, fmt.Sprintf("%s: till %s not answering; moved from %s to %s on %s", id, d.ID, from, backup, bd.ID))
+	}
+	return changed
 }
 
 // --- agent endpoints ---------------------------------------------------------
@@ -474,11 +575,22 @@ func (s *Server) handleOutcome(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	j.Reports++
+	if j.MovedFromTill != "" && d.ID == j.MovedFromTill {
+		// The original till reports after the job was moved: it printed
+		// there too, so the floor may have two copies.
+		if req.Kind == "printed" || req.Kind == "written" {
+			j.LateOutcome = &req
+			s.alerts = append(s.alerts, fmt.Sprintf("%s: printed on till %s after it was moved to %s; check for a duplicate", j.Job.ID, d.ID, j.Job.PrinterID))
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	if j.State == done {
 		w.WriteHeader(http.StatusNoContent) // repeated report: no-op
 		return
 	}
 	j.State = done
+	j.RecordedBy = "agent"
 	j.Outcome = &req
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -573,6 +685,17 @@ func (s *Server) handleHostile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"flags": flags})
 }
 
+func (s *Server) handleBackups(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Backups map[string]string `json:"backups"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	s.SetBackups(req.Backups)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -606,6 +729,7 @@ type State struct {
 	Devices []DeviceState `json:"devices"`
 	Jobs    []JobState    `json:"jobs"`
 	Hostile []Flag        `json:"hostile"`
+	Alerts  []string      `json:"alerts"`
 }
 
 type DeviceState struct {
@@ -628,12 +752,16 @@ type JobState struct {
 	Deliveries int                 `json:"deliveries"`
 	Reports    int                 `json:"reports"`
 	Outcome    *api.OutcomeRequest `json:"outcome,omitempty"`
+	RecordedBy string              `json:"recorded_by,omitempty"`
+	MovedFrom  string              `json:"moved_from,omitempty"`
+	MovedTill  string              `json:"moved_from_till,omitempty"`
+	Late       *api.OutcomeRequest `json:"late_outcome,omitempty"`
 }
 
 func (s *Server) Snapshot() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := State{Devices: []DeviceState{}, Jobs: []JobState{}, Hostile: []Flag{}}
+	st := State{Devices: []DeviceState{}, Jobs: []JobState{}, Hostile: []Flag{}, Alerts: append([]string{}, s.alerts...)}
 	for _, d := range s.devices {
 		st.Devices = append(st.Devices, DeviceState{
 			ID: d.ID, Restaurant: d.Restaurant, Name: d.Name, Revoked: d.Revoked,
@@ -646,6 +774,7 @@ func (s *Server) Snapshot() State {
 		st.Jobs = append(st.Jobs, JobState{
 			ID: id, Restaurant: j.Restaurant, PrinterID: j.Job.PrinterID, State: string(j.State),
 			LeasedTo: j.LeasedTo, Deliveries: j.Deliveries, Reports: j.Reports, Outcome: j.Outcome,
+			RecordedBy: j.RecordedBy, MovedFrom: j.MovedFrom, MovedTill: j.MovedFromTill, Late: j.LateOutcome,
 		})
 	}
 	for _, f := range Flags {

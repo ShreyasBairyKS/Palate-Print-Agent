@@ -33,9 +33,9 @@ type rig struct {
 
 // newRig starts a mock server and one fake printer per mode, pairs a store,
 // and writes a config naming the printers p0, p1, ...
-func newRig(t *testing.T, hold time.Duration, modes ...fakeprinter.Config) *rig {
+func newRig(t *testing.T, scfg mockserver.Config, modes ...fakeprinter.Config) *rig {
 	t.Helper()
-	srv := mockserver.New(mockserver.Config{Hold: hold})
+	srv := mockserver.New(scfg)
 	ts := httptest.NewServer(srv)
 	t.Cleanup(func() { ts.Close(); srv.Close() })
 
@@ -130,7 +130,7 @@ func order(number string) api.Slip {
 }
 
 func TestM1MockOrderPrintsWithinOneSecond(t *testing.T) {
-	r := newRig(t, 25*time.Second, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
+	r := newRig(t, mockserver.Config{Hold: 25 * time.Second}, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
 	r.run(t)
 	time.Sleep(200 * time.Millisecond) // let the agent settle into a held long poll
 
@@ -167,7 +167,7 @@ func TestM1MockOrderPrintsWithinOneSecond(t *testing.T) {
 }
 
 func TestTwoStationsPrintOnTheirOwnPrinters(t *testing.T) {
-	r := newRig(t, 2*time.Second,
+	r := newRig(t, mockserver.Config{Hold: 2 * time.Second},
 		fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusNone},
 		fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
 	r.run(t)
@@ -182,7 +182,7 @@ func TestTwoStationsPrintOnTheirOwnPrinters(t *testing.T) {
 }
 
 func TestDeadPrinterEndsInRecordedFailure(t *testing.T) {
-	r := newRig(t, 2*time.Second, fakeprinter.Config{Mode: fakeprinter.Normal})
+	r := newRig(t, mockserver.Config{Hold: 2 * time.Second}, fakeprinter.Config{Mode: fakeprinter.Normal})
 	// Point p0 at a port nothing listens on.
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	r.cfg.Printers[0].Address = ln.Addr().String()
@@ -206,7 +206,7 @@ func TestDeadPrinterEndsInRecordedFailure(t *testing.T) {
 }
 
 func TestHostileJobNeverPrints(t *testing.T) {
-	r := newRig(t, 2*time.Second, fakeprinter.Config{Mode: fakeprinter.Normal})
+	r := newRig(t, mockserver.Config{Hold: 2 * time.Second}, fakeprinter.Config{Mode: fakeprinter.Normal})
 	r.run(t)
 	r.srv.SetHostile(mockserver.IPInJob)
 	id := r.srv.NewJob("demo", "p0", order("4001"))
@@ -221,7 +221,7 @@ func TestHostileJobNeverPrints(t *testing.T) {
 }
 
 func TestRevokedCredentialStopsTheAgent(t *testing.T) {
-	r := newRig(t, 300*time.Millisecond, fakeprinter.Config{Mode: fakeprinter.Normal})
+	r := newRig(t, mockserver.Config{Hold: 300 * time.Millisecond}, fakeprinter.Config{Mode: fakeprinter.Normal})
 	a := r.agent(t)
 	done := make(chan error, 1)
 	go func() { done <- a.Run(context.Background()) }()
@@ -240,7 +240,7 @@ func TestRevokedCredentialStopsTheAgent(t *testing.T) {
 }
 
 func TestKannadaOrderPrintsAsRaster(t *testing.T) {
-	r := newRig(t, 2*time.Second, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
+	r := newRig(t, mockserver.Config{Hold: 2 * time.Second}, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
 	r.run(t)
 	slip := order("6001")
 	slip.Items = []api.Item{{Quantity: 2, Name: "ಮಸಾಲೆ ದೋಸೆ", Notes: "ಕಡಿಮೆ ಖಾರ"}, {Quantity: 1, Name: "Filter Coffee"}}

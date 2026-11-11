@@ -49,7 +49,8 @@ type Slip struct {
 	// Banners. Decided by the wire track; Render only draws them.
 	Duplicate       bool   // every reprint is marked DUPLICATE
 	DuplicateReason string // e.g. "crash-recovery", "partial ticket on TANDOOR"
-	MovedFrom       string // printer name this job was moved from, if any
+	MovedFrom       string // printer the server moved this job from (its till stopped answering)
+	FallbackFrom    string // printer on this till that was down, so this prints on its backup
 	Delayed         bool   // job older than the configured age
 }
 

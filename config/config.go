@@ -39,6 +39,7 @@ type Printer struct {
 	Address     string `json:"address"`      // network: "192.168.1.50" or "192.168.1.50:9100"
 	PrinterName string `json:"printer_name"` // usb: the printer's name in Windows
 	Width       int    `json:"width"`        // 58 or 80
+	Backup      string `json:"backup"`       // id of another printer on this till, used when this one is down
 }
 
 // Timings are the agent's tunable numbers. Zero values take the defaults
@@ -50,6 +51,7 @@ type Timings struct {
 	FastRetries    int      `json:"fast_retries"`    // retries after a refused connection; default 2
 	RetryGap       Duration `json:"retry_gap"`       // default 1s
 	DelayedAfter   Duration `json:"delayed_after"`   // DELAYED banner past this age; default 10m
+	ProbeEvery     Duration `json:"probe_every"`     // how often a down printer is checked; default 30s
 }
 
 // Duration is a time.Duration written as "3s" in JSON.
@@ -83,6 +85,7 @@ func (t *Timings) applyDefaults() {
 	def(&t.StatusTimeout, 500*time.Millisecond)
 	def(&t.RetryGap, time.Second)
 	def(&t.DelayedAfter, 10*time.Minute)
+	def(&t.ProbeEvery, 30*time.Second)
 	if t.FastRetries == 0 {
 		t.FastRetries = 2
 	}
@@ -154,6 +157,17 @@ func (c *Config) Validate() error {
 			}
 		default:
 			return fmt.Errorf("printer %q: kind must be \"network\" or \"usb\"", p.ID)
+		}
+	}
+	for _, p := range c.Printers {
+		if p.Backup == "" {
+			continue
+		}
+		if p.Backup == p.ID {
+			return fmt.Errorf("printer %q: backup can't be itself", p.ID)
+		}
+		if !seen[p.Backup] {
+			return fmt.Errorf("printer %q: backup %q is not a printer on this till (a backup on another till is the server's job)", p.ID, p.Backup)
 		}
 	}
 	return nil

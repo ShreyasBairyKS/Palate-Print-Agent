@@ -89,6 +89,13 @@ var goldenCases = map[string]func() job.Slip{
 		s.Items = []job.Item{{Quantity: 1, Name: "Veg Biryani ಮತ್ತು ರಾಯಿತ"}}
 		return s
 	},
+	"fallback-partial": func() job.Slip {
+		s := baseSlip()
+		s.FallbackFrom = "Tandoor"
+		s.Duplicate = true
+		s.DuplicateReason = "partial ticket on TANDOOR"
+		return s
+	},
 	"latin-accents": func() job.Slip {
 		s := baseSlip()
 		s.Station = "Pâtisserie"
@@ -275,7 +282,7 @@ func anyInk(b []byte) bool {
 }
 
 func TestLatinSlipsHaveNoRaster(t *testing.T) {
-	for _, name := range []string{"basic", "long-names", "takeaway-banners", "latin-accents"} {
+	for _, name := range []string{"basic", "long-names", "takeaway-banners", "latin-accents", "fallback-partial"} {
 		out, _ := Render(goldenCases[name](), job.Width80)
 		for _, c := range escpos.Decode(out) {
 			if c.Name == "GS v 0" {

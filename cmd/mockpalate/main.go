@@ -5,6 +5,7 @@
 //	mockpalate -hostile repeat-id,ip-in-job  # misbehave from the start
 //
 // Hostile flags can also be changed while it runs: PUT /mock/hostile.
+// Backups for the till-not-answering rule: PUT /mock/backups.
 // See the README for the control endpoints.
 package main
 
@@ -24,13 +25,15 @@ func main() {
 	lease := flag.Duration("lease", 60*time.Second, "how long a fetched job is leased")
 	hostile := flag.String("hostile", "", "comma-separated hostile flags: "+flagList())
 	seed := flag.String("seed", "", "print a pairing code for this restaurant id at startup")
+	notAnswering := flag.Duration("not-answering", 0, "no poll for this long and a till's jobs move to backups (default 2 x hold + 10s)")
+	maxDeliveries := flag.Int("max-deliveries", 5, "deliveries without an outcome before the server records a job as failed")
 	flag.Parse()
 
 	flags, err := mockserver.ParseFlags(*hostile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	srv := mockserver.New(mockserver.Config{Hold: *hold, Lease: *lease})
+	srv := mockserver.New(mockserver.Config{Hold: *hold, Lease: *lease, NotAnswering: *notAnswering, MaxDeliveries: *maxDeliveries})
 	defer srv.Close()
 	srv.SetHostile(flags...)
 
