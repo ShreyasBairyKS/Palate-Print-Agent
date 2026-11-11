@@ -21,8 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"palate-print-agent/api"
-	"palate-print-agent/job"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/api"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 )
 
 // Flag switches on one hostile behaviour. Each one is something a real

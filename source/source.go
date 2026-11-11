@@ -9,7 +9,7 @@ package source
 import (
 	"context"
 
-	"palate-print-agent/job"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 )
 
 // JobSource is where work comes from. One implementation today (Palate cloud);

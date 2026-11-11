@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"palate-print-agent/internal/mockserver"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/mockserver"
 )
 
 func main() {

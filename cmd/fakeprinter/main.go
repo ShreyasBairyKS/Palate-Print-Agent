@@ -16,8 +16,8 @@ import (
 	"os"
 	"os/signal"
 
-	"palate-print-agent/internal/escpos"
-	"palate-print-agent/internal/fakeprinter"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/escpos"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/fakeprinter"
 )
 
 func main() {

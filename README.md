@@ -157,5 +157,5 @@ the printer writers.
 The two seams from the design plan are in `job/`, `render/` and `source/`.
 Both interns review any change to them.
 
-The module path `palate-print-agent` is a placeholder until the repository
-has a home.
+The module path is `github.com/ShreyasBairyKS/Palate-Print-Agent`, matching
+the GitHub repository.

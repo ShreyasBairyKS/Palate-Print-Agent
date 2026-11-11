@@ -11,7 +11,7 @@ package render
 import (
 	"errors"
 
-	"palate-print-agent/job"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 )
 
 // ErrNotImplemented is returned until M1 delivers Latin slips.

@@ -18,7 +18,7 @@ import (
 	"testing"
 )
 
-const module = "palate-print-agent"
+const module = "github.com/ShreyasBairyKS/Palate-Print-Agent"
 
 var rules = []struct {
 	pkg       string

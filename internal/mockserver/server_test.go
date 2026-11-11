@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"palate-print-agent/api"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/api"
 )
 
 type harness struct {

@@ -14,7 +14,7 @@ import (
 	"log"
 	"os"
 
-	"palate-print-agent/internal/escpos"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/escpos"
 )
 
 func main() {
