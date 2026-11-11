@@ -1,0 +1,57 @@
+000000  1b 40                              ESC @     initialise printer
+000002  1b 74 10                           ESC t     code page 16 WPC1252
+000005  1b 61 01                           ESC a     align centre
+000008  1b 45 01                           ESC E     bold on
+00000b  1d 42 01                           GS B      reverse (white on black) on
+00000e  20 44 55 50 4c 49 43 41 …+3        text      " DUPLICATE "
+000019  0a                                 LF        print and line feed
+00001a  1d 42 00                           GS B      reverse (white on black) off
+00001d  1b 45 00                           ESC E     bold off
+000020  1b 61 01                           ESC a     align centre
+000023  63 72 61 73 68 2d 72 65 …+6        text      "crash-recovery"
+000031  0a                                 LF        print and line feed
+000032  1b 61 01                           ESC a     align centre
+000035  1b 45 01                           ESC E     bold on
+000038  1d 42 01                           GS B      reverse (white on black) on
+00003b  20 4d 4f 56 45 44 20 46 …+8        text      " MOVED FROM WOK "
+00004b  0a                                 LF        print and line feed
+00004c  1d 42 00                           GS B      reverse (white on black) off
+00004f  1b 45 00                           ESC E     bold off
+000052  1b 61 01                           ESC a     align centre
+000055  63 68 65 63 6b 20 66 6f …+11       text      "check for duplicate"
+000068  0a                                 LF        print and line feed
+000069  1b 61 01                           ESC a     align centre
+00006c  1b 45 01                           ESC E     bold on
+00006f  1d 42 01                           GS B      reverse (white on black) on
+000072  20 44 45 4c 41 59 45 44 …+1        text      " DELAYED "
+00007b  0a                                 LF        print and line feed
+00007c  1d 42 00                           GS B      reverse (white on black) off
+00007f  1b 45 00                           ESC E     bold off
+000082  1b 61 01                           ESC a     align centre
+000085  1d 21 11                           GS !      character size 2x wide, 2x high
+000088  1b 45 01                           ESC E     bold on
+00008b  54 41 4e 44 4f 4f 52               text      "TANDOOR"
+000092  0a                                 LF        print and line feed
+000093  1b 45 00                           ESC E     bold off
+000096  1d 21 00                           GS !      character size 1x wide, 1x high
+000099  1b 61 00                           ESC a     align left
+00009c  54 61 6b 65 61 77 61 79 …+24       text      "Takeaway                   #1042"
+0000bc  0a                                 LF        print and line feed
+0000bd  31 31 20 4e 6f 76 20 32 …+9        text      "11 Nov 2026 14:05"
+0000ce  0a                                 LF        print and line feed
+0000cf  2d 2d 2d 2d 2d 2d 2d 2d …+24       text      "--------------------------------"
+0000ef  0a                                 LF        print and line feed
+0000f0  1b 45 01                           ESC E     bold on
+0000f3  32 20 78 20 50 61 6e 65 …+8        text      "2 x Paneer Tikka"
+000103  0a                                 LF        print and line feed
+000104  1b 45 00                           ESC E     bold off
+000107  20 20 20 20 2d 20 6c 65 …+8        text      "    - less spicy"
+000117  0a                                 LF        print and line feed
+000118  1b 45 01                           ESC E     bold on
+00011b  31 20 78 20 42 75 74 74 …+7        text      "1 x Butter Naan"
+00012a  0a                                 LF        print and line feed
+00012b  1b 45 00                           ESC E     bold off
+00012e  2d 2d 2d 2d 2d 2d 2d 2d …+24       text      "--------------------------------"
+00014e  0a                                 LF        print and line feed
+00014f  1b 64 03                           ESC d     print and feed 3 lines
+000152  1d 56 42 00                        GS V      feed 0 dots, then partial cut

@@ -1,0 +1,48 @@
+000000  1b 40                              ESC @     initialise printer
+000002  1b 74 10                           ESC t     code page 16 WPC1252
+000005  1b 61 01                           ESC a     align centre
+000008  1d 21 11                           GS !      character size 2x wide, 2x high
+00000b  1b 45 01                           ESC E     bold on
+00000e  54 41 4e 44 4f 4f 52               text      "TANDOOR"
+000015  0a                                 LF        print and line feed
+000016  1b 45 00                           ESC E     bold off
+000019  1d 21 00                           GS !      character size 1x wide, 1x high
+00001c  1b 61 00                           ESC a     align left
+00001f  54 61 62 6c 65 20 54 34 …+24       text      "Table T4                   #1042"
+00003f  0a                                 LF        print and line feed
+000040  31 31 20 4e 6f 76 20 32 …+9        text      "11 Nov 2026 14:05"
+000051  0a                                 LF        print and line feed
+000052  2d 2d 2d 2d 2d 2d 2d 2d …+24       text      "--------------------------------"
+000072  0a                                 LF        print and line feed
+000073  1b 45 01                           ESC E     bold on
+000076  31 32 20 78 20 54 61 6e …+24       text      "12 x Tandoori Chicken Half Plate"
+000096  0a                                 LF        print and line feed
+000097  20 20 20 20 20 77 69 74 …+24       text      "     with Mint Chutney and Onion"
+0000b7  0a                                 LF        print and line feed
+0000b8  20 20 20 20 20 52 69 6e …+2        text      "     Rings"
+0000c2  0a                                 LF        print and line feed
+0000c3  1b 45 00                           ESC E     bold off
+0000c6  20 20 20 20 20 2d 20 6e …+23       text      "     - no onions, extra chutney"
+0000e5  0a                                 LF        print and line feed
+0000e6  20 20 20 20 20 20 20 6f …+23       text      "       on the side, customer is"
+000105  0a                                 LF        print and line feed
+000106  20 20 20 20 20 20 20 61 …+17       text      "       allergic to cashew"
+00011f  0a                                 LF        print and line feed
+000120  1b 45 01                           ESC E     bold on
+000123  31 20 78 20 53 75 70 65 …+24       text      "1 x Supercalifragilisticexpialid"
+000143  0a                                 LF        print and line feed
+000144  20 20 20 20 6f 63 69 6f …+14       text      "    ociousmasalakulcha"
+00015a  0a                                 LF        print and line feed
+00015b  1b 45 00                           ESC E     bold off
+00015e  2d 2d 2d 2d 2d 2d 2d 2d …+24       text      "--------------------------------"
+00017e  0a                                 LF        print and line feed
+00017f  1b 45 01                           ESC E     bold on
+000182  4e 4f 54 45 3a 20 53 65 …+16       text      "NOTE: Serve the starters"
+00019a  0a                                 LF        print and line feed
+00019b  20 20 20 20 20 20 74 6f …+22       text      "      together with the drinks"
+0001b9  0a                                 LF        print and line feed
+0001ba  20 20 20 20 20 20 70 6c …+4        text      "      please"
+0001c6  0a                                 LF        print and line feed
+0001c7  1b 45 00                           ESC E     bold off
+0001ca  1b 64 03                           ESC d     print and feed 3 lines
+0001cd  1d 56 42 00                        GS V      feed 0 dots, then partial cut

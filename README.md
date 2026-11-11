@@ -4,23 +4,32 @@ The Palate print agent: a Go service on the restaurant's Windows till that
 polls Palate's cloud for print jobs and writes each station's ticket to its
 printer. The design is in `../Palate print agent design plan.md`.
 
-**Status: M0 (test rig and seams).** No agent yet. Nothing here talks to a
-real printer or a real Palate server, and nothing should until M4 is signed off.
+**Status: M1.** A mock order prints on the fake printer within 1 s (about
+4 ms in `TestM1MockOrderPrintsWithinOneSecond`). Nothing here should talk to
+a real printer or a real Palate server until M4 is signed off.
 
 ## Layout
 
 | Path | Track | What it is |
 | --- | --- | --- |
 | `job/` | seam | Shared types: `Job`, `Slip`, `Width`, `Outcome` |
-| `render/` | paper | `Render(slip, width) ([]byte, error)`, a stub until M1 |
 | `source/` | seam | The `JobSource` interface |
+| `render/` | paper | `Render(slip, width)`: Latin slips at 58/80 mm, WPC1252, golden tests in `testdata/` |
+| `source/cloud/` | wire | Long-poll Fetch, Report, printer registration, credential rotation, refusing hostile jobs |
+| `pair/` | wire | Redeem a pairing code; the credential is stored with DPAPI at machine scope |
+| `config/` | wire | The till's local config: server, printers and addresses, timings |
+| `printer/` | wire | The `Writer` interface and failure kinds (refused, hang, partial, paper out) |
+| `printer/net/` | wire | Raw TCP 9100 writer with a DLE EOT status check |
+| `queue/` | wire | One serial queue per printer: render, write, retry fast failures, report |
+| `agent/` | wire | The poll loop, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
-| `internal/escpos/` | rig | ESC/POS decoder behind `escpos-dump` and golden-test diffs |
-| `internal/fakeprinter/` | rig | Fake TCP 9100 printer with failure modes |
-| `internal/mockserver/` | rig | Mock Palate server with hostile flags |
+| `cmd/palate-agent/` | | The agent: `pair`, `test-print`, `run`, `version` |
+| `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder, fake printer, mock server |
 | `cmd/escpos-dump/`, `cmd/fakeprinter/`, `cmd/mockpalate/` | rig | Command-line wrappers |
-| `arch_test.go` | seam | Fails the build if `render` imports `net`, or anything below `JobSource` imports `net/http` |
-| `scripts/demo.sh` | rig | The M0 demo, run end to end |
+| `arch_test.go` | seam | `render` may not import `net`; `queue`, `printer/*`, `config` may not import `net/http` |
+| `e2e_test.go` | | The real agent against the mock server and fake printers |
+| `scripts/demo.sh` | | M1 demo: pair, test print, run, an order prints |
+| `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
 
 ## Build and test
 
@@ -38,12 +47,94 @@ go test ./...
 bash scripts/demo.sh
 ```
 
-The demo starts the mock server and the fake printer, plays the agent's side
-with curl (pair, report printers, long poll, print, report twice, hostile
-drop), and prints what each piece saw. It needs bash, curl and python.
+The demos need bash, curl and python. `go test -race` needs a 64-bit C
+compiler (cgo); the tests pass without it.
 
-`go test -race` needs a 64-bit C compiler (cgo). Install one (for example
-MSYS2's mingw-w64 gcc) to run the race detector; the tests pass without it.
+To regenerate the render golden files after a deliberate layout change:
+
+```bash
+go test ./render -update
+```
+
+Review the `.txt` dumps in the diff: they show every command and line of text.
+
+## Running the agent
+
+The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
+`-config` says otherwise:
+
+```json
+{
+  "server": "https://api.palate.example",
+  "agent_name": "front-till",
+  "printers": [
+    {"id": "p-tandoor", "name": "Tandoor", "kind": "network", "address": "192.168.1.50", "width": 80},
+    {"id": "p-wok", "name": "Wok", "kind": "network", "address": "192.168.1.51:9100", "width": 58}
+  ],
+  "timings": {"stall_timeout": "10s"}
+}
+```
+
+| Command | What it does |
+| --- | --- |
+| `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |
+| `palate-agent test-print -printer p-tandoor` | Prints a test slip and says whether the printer confirmed it |
+| `palate-agent run` | Polls and prints in the foreground until Ctrl-C, or until the credential is revoked |
+
+Config rules:
+
+- **Printer addresses:** IP literals only, in 10/8, 172.16/12 or 192.168/16,
+  with port 9100 by default. Hostnames and public IPs are refused. Loopback is
+  also accepted, for the rig.
+- **Server:** must use https. Plain http is allowed only to a loopback address,
+  for the mock.
+
+| Timing | Default | Meaning |
+| --- | --- | --- |
+| `connect_timeout` | 3s | No connection by then is a hang |
+| `stall_timeout` | 10s | A write with no progress this long is a hang (or partial) |
+| `status_timeout` | 500ms | How long to wait for a DLE EOT reply |
+| `fast_retries` / `retry_gap` | 2 / 1s | Retries after a refused connection only |
+| `delayed_after` | 10m | Older jobs print with a DELAYED banner |
+
+### What happens to a ticket
+
+1. The long poll returns the moment the server queues a job.
+2. Jobs carrying an address, raw printer bytes, any unknown field, or a
+   printer id that is an address are refused and reported `failed`. They never
+   reach a printer. A job repeated in one response prints once.
+3. The job's printer queue renders it. If the slip has text outside WPC1252
+   (Kannada, Devanagari, Tamil), it is reported `failed` with the reason until
+   M2 adds the raster path.
+4. The writer connects, writes, then asks for the paper status.
+
+   | Writer result | Outcome |
+   | --- | --- |
+   | Printer confirms | `printed` |
+   | No reply | `written` |
+   | Refused | Retried twice, then `failed` |
+   | Hang, partial write or paper out | `failed` with the reason, no retry |
+
+5. The outcome is reported, with retries. Printer health rides on the next poll.
+
+## Known gaps (by milestone)
+
+- **M2:**
+  - USB printers.
+  - Indian scripts.
+  - The printed-ID ledger. Until then, a crash between printing and
+    reporting, or an outcome that can't be reported, prints again when the
+    60 s lease expires.
+- **M3:**
+  - The failure ladder (backup printers, alerts) and the till-not-answering
+    rule. Today a dead printer's tickets end as recorded failures.
+  - The watchdog.
+  - Small tickets to a stalled printer. A printer that stops reading still
+    has socket buffers that accept a small ticket, so it shows as `written`.
+    A big ticket shows as `partial`. Telling a stall apart on small tickets
+    needs measuring on real printers.
+- **M4:** the Windows service, the signed MSI and update verification. Today
+  `run` is a foreground command.
 
 ## The rig
 
@@ -69,8 +160,7 @@ with `-dump`, decodes each connection as it closes.
 `-status ok|paper-out|none` sets the `DLE EOT` answers.
 
 A *connect* timeout can't be faked on loopback, because the OS completes the
-handshake. To test one, dial a blackholed address such as `10.255.255.1:9100`,
-or inject a dialer in the writer's tests.
+handshake. `printer/net` tests inject a dialer that never answers instead.
 
 ### escpos-dump
 
@@ -103,18 +193,18 @@ pairing code for restaurant `demo`.
 What the mock already enforces:
 
 - **Restaurant scope:** the restaurant comes from the credential. Requests with
-  unknown fields, such as a `restaurant_id`, are rejected, and another
-  restaurant's job looks like a missing one (404).
-- **Job delivery:** jobs go only to the device that registered the job's
-  printer id. A lease that expires returns the job to the queue.
+  unknown fields are rejected, and another restaurant's job looks like a
+  missing one (404).
+- **Job delivery:** jobs go only to the device that registered the printer id.
+  A lease that expires returns the job to the queue.
 - **Repeat reports:** a second report for a job is a no-op. The first outcome
   is kept.
 - **Pairing:** codes are single-use, expire after 10 minutes, and are limited
   to 5 failed attempts per minute per address.
 - **Rotation:** the new credential arrives in a poll response. The old one
-  works until the new one is first used, then gets `repair_needed`.
+  works until the new one is first used.
 
-**Control endpoints** (mock only, for tests and people):
+**Control endpoints** (mock only):
 
 | Call | Body |
 | --- | --- |
@@ -125,37 +215,27 @@ What the mock already enforces:
 | `POST /mock/devices/{id}/revoke` | none |
 | `POST /mock/devices/{id}/rotate` | none |
 
-**Hostile flags** (`-hostile a,b` at startup, or `PUT /mock/hostile`):
+**Hostile flags** (`-hostile a,b`, or `PUT /mock/hostile`):
 
-| Flag | What the server does | What the agent must do |
+| Flag | What the server does | What the agent does |
 | --- | --- | --- |
-| `ip-in-job` | Adds `printer_address` to each job | Refuse the job |
-| `raw-bytes` | Adds `raw` printer bytes to each job | Refuse the job |
-| `huge-payload` | Pads the poll response to about 50 MB | Stop at `api.MaxResponseBytes` (1 MiB) |
-| `drop-midway` | Sends half the response, then closes | Retry; the job is redelivered after the lease |
-| `short-lease` | Leases for 2 s | Print once; the ledger stops the redelivery |
-| `repeat-id` | Sends each job twice in one response | Print once |
-
-Not in the mock yet:
-
-- the till-not-answering rule and moving jobs to another till (M3)
-- the update manifest (M4)
+| `ip-in-job` | Adds `printer_address` to each job | Refuses the job and reports it `failed` |
+| `raw-bytes` | Adds `raw` printer bytes to each job | Refuses the job and reports it `failed` |
+| `huge-payload` | Pads the poll response to about 50 MB | Stops at 1 MiB and backs off |
+| `drop-midway` | Sends half the response, then closes | Backs off and retries; the job comes back after the lease |
+| `short-lease` | Leases for 2 s | Today: may print twice (the M2 ledger fixes this) |
+| `repeat-id` | Sends each job twice in one response | Prints once |
 
 ## Provisional: what changes when the missing documents arrive
 
-`backend-notes.md`, `security.md` and the intern brief were not available
-when M0 was written. The endpoint paths, JSON shapes, pairing-code format and
-error codes in `api/` follow the design plan's illustrative table.
-`backend-notes.md` wins on any difference.
+`backend-notes.md`, `security.md` and the intern brief were not available.
+The endpoint paths, JSON shapes, pairing-code format and error codes in
+`api/` follow the design plan's illustrative table. `backend-notes.md` wins
+on any difference.
 
-Because only `api/`, `internal/mockserver/` and (from M1) `source/cloud`
-know the wire format, reconciling should not touch the queue, the renderer or
-the printer writers.
-
-## Seams
-
-The two seams from the design plan are in `job/`, `render/` and `source/`.
-Both interns review any change to them.
+Only `api/`, `source/cloud/`, `pair/redeem.go` and `internal/mockserver/`
+know the wire format. Reconciling should not touch the queue, the renderer
+or the printer writers.
 
 The module path is `github.com/ShreyasBairyKS/Palate-Print-Agent`, matching
 the GitHub repository.

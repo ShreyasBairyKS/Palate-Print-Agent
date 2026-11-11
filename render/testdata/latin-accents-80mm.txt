@@ -1,0 +1,30 @@
+000000  1b 40                              ESC @     initialise printer
+000002  1b 74 10                           ESC t     code page 16 WPC1252
+000005  1b 61 01                           ESC a     align centre
+000008  1d 21 11                           GS !      character size 2x wide, 2x high
+00000b  1b 45 01                           ESC E     bold on
+00000e  50 c2 54 49 53 53 45 52 …+2        text      "P\xc2TISSERIE"
+000018  0a                                 LF        print and line feed
+000019  1b 45 00                           ESC E     bold off
+00001c  1d 21 00                           GS !      character size 1x wide, 1x high
+00001f  1b 61 00                           ESC a     align left
+000022  54 61 62 6c 65 20 54 34 …+40       text      "Table T4                                   #1042"
+000052  0a                                 LF        print and line feed
+000053  31 31 20 4e 6f 76 20 32 …+9        text      "11 Nov 2026 14:05"
+000064  0a                                 LF        print and line feed
+000065  2d 2d 2d 2d 2d 2d 2d 2d …+40       text      "------------------------------------------------"
+000095  0a                                 LF        print and line feed
+000096  1b 45 01                           ESC E     bold on
+000099  31 20 78 20 43 61 66 e9 …+13       text      "1 x Caf\xe9 cr\xe8me br\xfbl\xe9e"
+0000ae  0a                                 LF        print and line feed
+0000af  1b 45 00                           ESC E     bold off
+0000b2  20 20 20 20 2d 20 6a 61 …+16       text      "    - jalape\xf1o \x96 \x93extra\x94"
+0000ca  0a                                 LF        print and line feed
+0000cb  1b 45 01                           ESC E     bold on
+0000ce  33 20 78 20 43 72 ea 70 …+11       text      "3 x Cr\xeape Suzette \x80"
+0000e1  0a                                 LF        print and line feed
+0000e2  1b 45 00                           ESC E     bold off
+0000e5  2d 2d 2d 2d 2d 2d 2d 2d …+40       text      "------------------------------------------------"
+000115  0a                                 LF        print and line feed
+000116  1b 64 03                           ESC d     print and feed 3 lines
+000119  1d 56 42 00                        GS V      feed 0 dots, then partial cut

@@ -26,6 +26,7 @@ var rules = []struct {
 }{
 	{"render", []string{"net", "net/http", "crypto/tls"}},
 	{"job", []string{"net", "net/http"}},
+	{"config", []string{"net/http"}},
 	{"queue", []string{"net/http"}},
 	{"ladder", []string{"net/http"}},
 	{"printer/net", []string{"net/http"}},
