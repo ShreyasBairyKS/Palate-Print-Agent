@@ -3,12 +3,14 @@ package queue
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/ledger"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer"
 )
 
@@ -86,10 +88,29 @@ func testJob(id, printerID string) job.Job {
 	}}
 }
 
+// plain is a ledger codec that skips DPAPI, so these tests run anywhere.
+func plain(b []byte) ([]byte, error) { return append([]byte(nil), b...), nil }
+
+func openLedger(t *testing.T, path string) *ledger.Ledger {
+	t.Helper()
+	if path == "" {
+		path = filepath.Join(t.TempDir(), "ledger.bin")
+	}
+	l, err := ledger.Open(path, ledger.Options{Protect: plain, Unprotect: plain})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	return l
+}
+
 func start(t *testing.T, printers []Printer, rep Reporter, cfg Config) *Queue {
 	t.Helper()
 	if cfg.RetryGap == 0 {
 		cfg.RetryGap = 10 * time.Millisecond
+	}
+	if cfg.Ledger == nil {
+		cfg.Ledger = openLedger(t, "")
 	}
 	q := New(printers, rep, cfg)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,10 +232,10 @@ func TestRenderFailureIsRecorded(t *testing.T) {
 	rec := newRecorder()
 	q := start(t, []Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: w}}, rec, Config{})
 	j := testJob("j1", "p1")
-	j.Slip.Items[0].Name = "ಮಸಾಲೆ ದೋಸೆ"
+	j.Slip.Items[0].Name = "麻婆豆腐" // no bundled font covers Chinese
 	q.Submit(context.Background(), j)
-	if r := rec.next(t); r.o.Kind != job.Failed || !strings.Contains(r.o.Reason, "raster") {
-		t.Fatalf("outcome = %+v; want failed, saying raster is needed", r.o)
+	if r := rec.next(t); r.o.Kind != job.Failed || !strings.Contains(r.o.Reason, "no bundled font") {
+		t.Fatalf("outcome = %+v; want failed, saying no font covers it", r.o)
 	}
 	if w.n() != 0 {
 		t.Fatal("nothing should be written when rendering fails")
@@ -243,5 +264,128 @@ func TestReportIsRetried(t *testing.T) {
 	q.Submit(context.Background(), testJob("j1", "p1"))
 	if r := rec.next(t); r.id != "j1" {
 		t.Fatalf("got %s", r.id)
+	}
+}
+
+// --- ledger and crash behaviour -----------------------------------------------
+
+func TestCrashMidWriteReprintsAsDuplicate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.bin")
+	// Before the "crash": the job was recorded as Attempting, then the agent died.
+	l := openLedger(t, path)
+	l.Begin("j1")
+	l.Close()
+
+	w := &scriptWriter{}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: w}}, rec, Config{Ledger: openLedger(t, path)})
+	q.Submit(context.Background(), testJob("j1", "p1"))
+	r := rec.next(t)
+	if r.o.Kind != job.Written || !strings.Contains(r.o.Reason, CrashRecovery) {
+		t.Fatalf("outcome = %+v; want written with reason %s", r.o, CrashRecovery)
+	}
+	if w.n() != 1 || !strings.Contains(string(w.calls[0]), "DUPLICATE") || !strings.Contains(string(w.calls[0]), CrashRecovery) {
+		t.Fatalf("the reprint must carry a DUPLICATE banner and the reason")
+	}
+}
+
+func TestDoneJobIsNotPrintedAgain(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.bin")
+	// Before the "crash": printed and recorded, but the report never went out.
+	l := openLedger(t, path)
+	l.Begin("j1")
+	l.Finish("j1", job.Outcome{Kind: job.Printed, PrinterID: "p1"})
+	l.Close()
+
+	w := &scriptWriter{}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: w}}, rec, Config{Ledger: openLedger(t, path)})
+	q.Submit(context.Background(), testJob("j1", "p1"))
+	r := rec.next(t)
+	if r.o.Kind != job.Printed || r.o.PrinterID != "p1" {
+		t.Fatalf("outcome = %+v; want the stored printed outcome", r.o)
+	}
+	if w.n() != 0 {
+		t.Fatalf("a job the ledger says is done was printed %d more time(s)", w.n())
+	}
+}
+
+// ledgerCheckingReporter fails the test if an outcome is reported before
+// the ledger has it as Done.
+type ledgerCheckingReporter struct {
+	*recorder
+	l *ledger.Ledger
+	t *testing.T
+}
+
+func (r ledgerCheckingReporter) Report(ctx context.Context, id string, o job.Outcome) error {
+	if e, _ := r.l.Get(id); e.State != ledger.Done {
+		r.t.Errorf("job %s reported while the ledger says %q", id, e.State)
+	}
+	return r.recorder.Report(ctx, id, o)
+}
+
+func TestLedgerIsDoneBeforeReport(t *testing.T) {
+	l := openLedger(t, "")
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: &scriptWriter{}}},
+		ledgerCheckingReporter{rec, l, t}, Config{Ledger: l})
+	q.Submit(context.Background(), testJob("j1", "p1"))
+	rec.next(t)
+}
+
+func TestRepeatWhileQueuedIsIgnored(t *testing.T) {
+	w := &scriptWriter{block: make(chan struct{})}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: w}}, rec, Config{})
+	q.Submit(context.Background(), testJob("j1", "p1"))
+	time.Sleep(50 * time.Millisecond)
+	q.Submit(context.Background(), testJob("j1", "p1")) // lease expired; delivered again
+	close(w.block)
+	rec.next(t)
+	select {
+	case r := <-rec.ch:
+		t.Fatalf("second outcome for %s; a repeat while printing must be ignored", r.id)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if w.n() != 1 {
+		t.Fatalf("%d writes, want 1", w.n())
+	}
+}
+
+type brokenLedger struct{ *ledger.Ledger }
+
+func (brokenLedger) Begin(string) error { return errors.New("disk full") }
+
+func TestLedgerFailurePrintsAnywayAndSaysSo(t *testing.T) {
+	w := &scriptWriter{}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: w}}, rec,
+		Config{Ledger: brokenLedger{openLedger(t, "")}})
+	q.Submit(context.Background(), testJob("j1", "p1"))
+	r := rec.next(t)
+	if r.o.Kind != job.Written || !strings.Contains(r.o.Reason, "ledger unavailable") {
+		t.Fatalf("outcome = %+v; want written, saying the ledger was unavailable", r.o)
+	}
+}
+
+func TestStopMidWriteLeavesAttempting(t *testing.T) {
+	l := openLedger(t, "")
+	w := &scriptWriter{block: make(chan struct{})}
+	rec := newRecorder()
+	q := New([]Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: w}}, rec, Config{Ledger: l})
+	ctx, cancel := context.WithCancel(context.Background())
+	q.Start(ctx)
+	q.Submit(ctx, testJob("j1", "p1"))
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	q.Wait()
+	if e, _ := l.Get("j1"); e.State != ledger.Attempting {
+		t.Fatalf("ledger = %+v; want attempting after stopping mid-write", e)
+	}
+	select {
+	case r := <-rec.ch:
+		t.Fatalf("reported %+v while stopping; the job should come back after its lease", r)
+	default:
 	}
 }

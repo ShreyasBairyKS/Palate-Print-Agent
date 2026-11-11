@@ -6,12 +6,15 @@
 //   - no config, no credentials: everything it needs is in its arguments
 //   - deterministic: the same slip and width give byte-identical output on
 //     every till, which is what the golden tests check. In particular it
-//     never reads the clock or the time zone: PlacedAt is printed in
-//     whatever location the caller gave it.
+//     never reads the clock, the time zone or the system's fonts: PlacedAt is
+//     printed in whatever location the caller gave it, and the fonts for the
+//     raster path are embedded.
 //
-// M1 covers Latin slips: text the printer can print from code page WPC1252.
-// Any other character makes Render return an error wrapping ErrNeedsRaster;
-// M2 adds the raster path for Kannada, Devanagari and Tamil.
+// Each paragraph is decided on its own: if every character is in code page
+// WPC1252 it goes as text; otherwise (Kannada, Devanagari, Tamil) it is
+// shaped with the bundled Noto fonts and sent as a raster image. Text no
+// bundled font covers makes Render return an error wrapping
+// ErrUnsupportedScript.
 package render
 
 import (
@@ -23,21 +26,6 @@ import (
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 )
-
-// ErrNeedsRaster means the slip has characters the printer's code page lacks.
-var ErrNeedsRaster = errors.New("render: text needs the raster path (M2)")
-
-// UnsupportedRuneError names the first character that can't be printed as text.
-type UnsupportedRuneError struct {
-	Field string // "items[2].name", "station", ...
-	Rune  rune
-}
-
-func (e *UnsupportedRuneError) Error() string {
-	return fmt.Sprintf("render: %s contains %q (U+%04X), not in code page WPC1252; needs the raster path (M2)", e.Field, e.Rune, e.Rune)
-}
-
-func (e *UnsupportedRuneError) Unwrap() error { return ErrNeedsRaster }
 
 // ESC/POS commands used by the layout.
 var (
@@ -63,6 +51,15 @@ func columns(w job.Width) int {
 	return 48
 }
 
+// renderer carries the output and the first error, so the layout reads
+// straight down.
+type renderer struct {
+	b         bytes.Buffer
+	cols      int
+	paperDots int
+	err       error
+}
+
 // Render turns one station's slip into the exact bytes a printer will accept.
 // It opens no socket, reads no config, and never sees a credential.
 func Render(slip job.Slip, width job.Width) ([]byte, error) {
@@ -73,32 +70,33 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 		return nil, err
 	}
 	cols := columns(width)
-	var b bytes.Buffer
+	r := &renderer{cols: cols, paperDots: cols * colDots}
+	b := &r.b
 	b.Write(cmdInit)
 	b.Write(cmdCodePage)
 
 	// Banners first, so nobody misses them.
 	if slip.Duplicate {
-		banner(&b, "DUPLICATE", cols)
+		r.banner("DUPLICATE")
 		if slip.DuplicateReason != "" {
 			b.Write(cmdAlignCentre)
-			lines(&b, wrap(slip.DuplicateReason, cols, 0))
+			r.block(slip.DuplicateReason, cols, 0, "", "", style{centre: true})
 		}
 	}
 	if slip.MovedFrom != "" {
-		banner(&b, "MOVED FROM "+strings.ToUpper(slip.MovedFrom), cols)
+		r.banner("MOVED FROM " + strings.ToUpper(slip.MovedFrom))
 		b.Write(cmdAlignCentre)
-		lines(&b, []string{"check for duplicate"})
+		r.text("check for duplicate")
 	}
 	if slip.Delayed {
-		banner(&b, "DELAYED", cols)
+		r.banner("DELAYED")
 	}
 
 	// Station, large and centred. Double width halves the line length.
 	b.Write(cmdAlignCentre)
 	b.Write(cmdSizeDouble)
 	b.Write(cmdBoldOn)
-	lines(&b, wrap(strings.ToUpper(slip.Station), cols/2, 0))
+	r.block(strings.ToUpper(slip.Station), cols/2, 0, "", "", style{bold: true, double: true, centre: true})
 	b.Write(cmdBoldOff)
 	b.Write(cmdSizeNormal)
 	b.Write(cmdAlignLeft)
@@ -107,35 +105,114 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 	if slip.Table != "" {
 		table = "Table " + slip.Table
 	}
-	lines(&b, []string{spread(table, "#"+slip.OrderNumber, cols)})
-	lines(&b, []string{slip.PlacedAt.Format("02 Jan 2006 15:04")})
-	lines(&b, []string{strings.Repeat("-", cols)})
+	r.spread(table, "#"+slip.OrderNumber)
+	r.text(slip.PlacedAt.Format("02 Jan 2006 15:04"))
+	r.text(strings.Repeat("-", cols))
 
 	for _, it := range slip.Items {
 		prefix := fmt.Sprintf("%d x ", it.Quantity)
 		b.Write(cmdBoldOn)
-		lines(&b, wrap(prefix+it.Name, cols, len(prefix)))
+		r.block(prefix+it.Name, cols, len(prefix), "", "", style{bold: true})
 		b.Write(cmdBoldOff)
 		if it.Notes != "" {
-			lines(&b, indent(wrap(it.Notes, cols-len(prefix)-2, 0), strings.Repeat(" ", len(prefix))+"- ", strings.Repeat(" ", len(prefix)+2)))
+			r.block(it.Notes, cols-len(prefix)-2, 0, strings.Repeat(" ", len(prefix))+"- ", strings.Repeat(" ", len(prefix)+2), style{})
 		}
 	}
-	lines(&b, []string{strings.Repeat("-", cols)})
+	r.text(strings.Repeat("-", cols))
 
 	if slip.Notes != "" {
 		b.Write(cmdBoldOn)
-		lines(&b, wrap("NOTE: "+slip.Notes, cols, 6))
+		r.block("NOTE: "+slip.Notes, cols, 6, "", "", style{bold: true})
 		b.Write(cmdBoldOff)
 	}
 
 	b.Write(cmdFeedLines)
 	b.Write(cmdCut)
-
-	// Encoding last: the layout works in runes, the printer in WPC1252 bytes.
-	return encode(b.Bytes())
+	if r.err != nil {
+		return nil, r.err
+	}
+	return b.Bytes(), nil
 }
 
-// checkSlip rejects what can't be printed as text, naming the field.
+// style is how a paragraph looks. On the text path the ESC/POS commands
+// around the paragraph do the work; the raster path draws it.
+type style struct {
+	bold, double, centre, reverse bool
+}
+
+// block writes one paragraph: wrapped to width columns (continuation lines
+// hang further in), the first line prefixed by first and the rest by rest.
+func (r *renderer) block(text string, width, hang int, first, rest string, st style) {
+	if r.err != nil {
+		return
+	}
+	if !needsRaster(text) {
+		for _, l := range indent(wrap(text, width, hang), first, rest) {
+			r.text(l)
+		}
+		return
+	}
+	scale := 1
+	if st.double {
+		scale = 2
+	}
+	// Leading spaces in the prefixes become an indent in dots, so raster
+	// lines line up with text lines; the rest of the first prefix ("- ") is
+	// drawn as part of the paragraph.
+	lead := len(first) - len(strings.TrimLeft(first, " "))
+	firstX := lead * colDots * scale
+	restX := (len(rest) + hang) * colDots * scale
+	r.err = rasterBlock(&r.b, strings.TrimLeft(first, " ")+text, r.paperDots, firstX, restX, st.bold, st.double, st.centre, st.reverse)
+}
+
+// banner is a centred, bold, white-on-black line.
+func (r *renderer) banner(text string) {
+	b := &r.b
+	b.Write(cmdAlignCentre)
+	b.Write(cmdBoldOn)
+	b.Write(cmdReverseOn)
+	if needsRaster(text) {
+		if r.err == nil {
+			r.err = rasterBlock(b, text, r.paperDots, 0, 0, true, false, true, true)
+		}
+	} else {
+		for _, l := range wrap(text, r.cols-2, 0) {
+			r.text(" " + l + " ")
+		}
+	}
+	b.Write(cmdReverseOff)
+	b.Write(cmdBoldOff)
+}
+
+// spread puts left and right on one line, or on two if they don't fit.
+func (r *renderer) spread(left, right string) {
+	if needsRaster(left) || needsRaster(right) {
+		if r.err == nil {
+			r.err = rasterSpread(&r.b, left, right, r.paperDots)
+		}
+		return
+	}
+	gap := r.cols - runeLen(left) - runeLen(right)
+	if gap < 1 {
+		r.text(left)
+		r.text(strings.Repeat(" ", max(0, r.cols-runeLen(right))) + right)
+		return
+	}
+	r.text(left + strings.Repeat(" ", gap) + right)
+}
+
+// text writes one line of WPC1252 text and a line feed. Callers have already
+// checked the line needs no raster.
+func (r *renderer) text(line string) {
+	enc, err := encode(sanitise(line))
+	if err != nil && r.err == nil {
+		r.err = err
+	}
+	r.b.Write(enc)
+	r.b.WriteByte('\n')
+}
+
+// checkSlip rejects slips that can't be printed, naming the field.
 func checkSlip(s job.Slip) error {
 	fields := []struct{ name, text string }{
 		{"station", s.Station}, {"table", s.Table}, {"order_number", s.OrderNumber},
@@ -153,11 +230,9 @@ func checkSlip(s job.Slip) error {
 		if !utf8.ValidString(f.text) {
 			return fmt.Errorf("render: %s is not valid UTF-8", f.name)
 		}
-		for _, r := range f.text {
-			if r >= 0x20 && r != 0x7F {
-				if _, ok := to1252(r); !ok {
-					return &UnsupportedRuneError{Field: f.name, Rune: r}
-				}
+		if needsRaster(f.text) {
+			if _, err := itemise([]rune(sanitise(f.text))); err != nil {
+				return fmt.Errorf("render: %s: %w", f.name, err)
 			}
 		}
 	}
@@ -165,34 +240,6 @@ func checkSlip(s job.Slip) error {
 		return errors.New("render: slip needs a station, an order number and at least one item")
 	}
 	return nil
-}
-
-func banner(b *bytes.Buffer, text string, cols int) {
-	b.Write(cmdAlignCentre)
-	b.Write(cmdBoldOn)
-	b.Write(cmdReverseOn)
-	for _, l := range wrap(text, cols-2, 0) {
-		b.WriteString(" " + l + " ")
-		b.WriteByte('\n')
-	}
-	b.Write(cmdReverseOff)
-	b.Write(cmdBoldOff)
-}
-
-func lines(b *bytes.Buffer, ls []string) {
-	for _, l := range ls {
-		b.WriteString(l)
-		b.WriteByte('\n')
-	}
-}
-
-// spread puts left and right on one line, or on two if they don't fit.
-func spread(left, right string, cols int) string {
-	gap := cols - runeLen(left) - runeLen(right)
-	if gap < 1 {
-		return left + "\n" + strings.Repeat(" ", max(0, cols-runeLen(right))) + right
-	}
-	return left + strings.Repeat(" ", gap) + right
 }
 
 func indent(ls []string, first, rest string) []string {
@@ -272,24 +319,15 @@ func sanitise(s string) string {
 
 func runeLen(s string) int { return utf8.RuneCountInString(s) }
 
-// encode converts the UTF-8 layout to WPC1252. ESC/POS command bytes are all
-// below 0x80, so they pass through unchanged. checkSlip has already proved
-// every printable rune maps.
-func encode(layout []byte) ([]byte, error) {
-	out := make([]byte, 0, len(layout))
-	for i := 0; i < len(layout); {
-		r, size := utf8.DecodeRune(layout[i:])
-		if r < 0x80 && size == 1 {
-			out = append(out, layout[i])
-			i++
-			continue
-		}
+// encode converts one line of text to WPC1252.
+func encode(s string) ([]byte, error) {
+	out := make([]byte, 0, len(s))
+	for _, r := range s {
 		c, ok := to1252(r)
 		if !ok {
-			return nil, &UnsupportedRuneError{Field: "layout", Rune: r}
+			return nil, fmt.Errorf("render: %q (U+%04X) is not in code page WPC1252", r, r)
 		}
 		out = append(out, c)
-		i += size
 	}
 	return out, nil
 }

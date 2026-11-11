@@ -13,7 +13,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/dpapi"
 )
+
+// entropy separates credential blobs from the agent's other DPAPI blobs.
+var entropy = []byte("palate-print-agent/credential/v1")
 
 // ErrNotPaired means no credential has been stored yet.
 var ErrNotPaired = errors.New("not paired: run `palate-agent pair` with a code from the portal")
@@ -37,7 +42,7 @@ func (s FileStore) Load() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	plain, err := unprotect(blob)
+	plain, err := dpapi.Unprotect(blob, entropy)
 	if err != nil {
 		return "", fmt.Errorf("decrypting %s: %w (re-pair if this till was reimaged)", s.Path, err)
 	}
@@ -55,7 +60,7 @@ func (s FileStore) Save(credential string) error {
 	if strings.TrimSpace(credential) == "" {
 		return errors.New("refusing to save an empty credential")
 	}
-	blob, err := protect([]byte(credential))
+	blob, err := dpapi.Protect([]byte(credential), entropy)
 	if err != nil {
 		return fmt.Errorf("encrypting credential: %w", err)
 	}

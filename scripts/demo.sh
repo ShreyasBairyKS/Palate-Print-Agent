@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# M1 demo: the real agent pairs with the mock server, test-prints, then runs.
-# An order confirmed on the mock prints on the fake printer.
+# Demo: the real agent pairs with the mock server, test-prints, then runs.
+# An order confirmed on the mock prints on the fake printer, with a Kannada
+# dish name sent as a raster image.
 #
 #   go build -o bin/ ./cmd/... && bash scripts/demo.sh
 #
@@ -52,7 +53,7 @@ sleep 1
 # Sent from a file: on Windows, curl's command-line arguments pass through
 # the ANSI code page, which would mangle the accents.
 cat >"$OUT/order.json" <<'EOF'
-{"restaurant_id":"demo","jobs":[{"printer_id":"p-tandoor","slip":{"station":"Tandoor","table":"T4","order_number":"1042","items":[{"quantity":2,"name":"Paneer Tikka","notes":"less spicy"},{"quantity":1,"name":"Café crème brûlée"}],"notes":"birthday table, bring the cake last"}}]}
+{"restaurant_id":"demo","jobs":[{"printer_id":"p-tandoor","slip":{"station":"Tandoor","table":"T4","order_number":"1042","items":[{"quantity":2,"name":"Paneer Tikka","notes":"less spicy"},{"quantity":1,"name":"Café crème brûlée"},{"quantity":1,"name":"ಮಸಾಲೆ ದೋಸೆ","notes":"ಕಡಿಮೆ ಖಾರ"}],"notes":"birthday table, bring the cake last"}}]}
 EOF
 START=$(python -c "import time; print(time.time())")
 curl -sf -o /dev/null -X POST $U/mock/jobs -H "Content-Type: application/json" --data-binary "@$WIN_OUT/order.json"
@@ -72,6 +73,6 @@ for j in s['jobs']: print(j['id'], j['state'], (j.get('outcome') or {}).get('kin
 
 echo "== fake printer saw (test print, then the order)"
 cat "$OUT/printer.log"
-grep -E 'text|GS V' "$OUT/printer.out"
+grep -E 'text|GS V|GS v 0' "$OUT/printer.out"
 echo "== agent log"
 cat "$OUT/agent.log"

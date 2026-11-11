@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func newRig(t *testing.T, hold time.Duration, modes ...fakeprinter.Config) *rig 
 	t.Cleanup(func() { ts.Close(); srv.Close() })
 
 	r := &rig{srv: srv, conns: map[string]chan fakeprinter.Conn{}, store: &pair.MemStore{}}
-	cfg := &config.Config{Server: ts.URL, AgentName: "e2e-till"}
+	cfg := &config.Config{Server: ts.URL, AgentName: "e2e-till", LedgerFile: filepath.Join(t.TempDir(), "ledger.bin")}
 	for i, m := range modes {
 		id := "p" + string(rune('0'+i))
 		ch := make(chan fakeprinter.Conn, 16)
@@ -72,10 +73,20 @@ func newRig(t *testing.T, hold time.Duration, modes ...fakeprinter.Config) *rig 
 	return r
 }
 
+func (r *rig) agent(t *testing.T) *agent.Agent {
+	t.Helper()
+	a, err := agent.New(r.cfg, r.store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { a.Close() })
+	return a
+}
+
 // run starts the agent and waits until its printers are registered.
 func (r *rig) run(t *testing.T) {
 	t.Helper()
-	a := agent.New(r.cfg, r.store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a := r.agent(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- a.Run(ctx) }()
@@ -211,7 +222,7 @@ func TestHostileJobNeverPrints(t *testing.T) {
 
 func TestRevokedCredentialStopsTheAgent(t *testing.T) {
 	r := newRig(t, 300*time.Millisecond, fakeprinter.Config{Mode: fakeprinter.Normal})
-	a := agent.New(r.cfg, r.store, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	a := r.agent(t)
 	done := make(chan error, 1)
 	go func() { done <- a.Run(context.Background()) }()
 	time.Sleep(200 * time.Millisecond)
@@ -225,5 +236,26 @@ func TestRevokedCredentialStopsTheAgent(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("agent kept running after its credential was revoked")
+	}
+}
+
+func TestKannadaOrderPrintsAsRaster(t *testing.T) {
+	r := newRig(t, 2*time.Second, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusOK})
+	r.run(t)
+	slip := order("6001")
+	slip.Items = []api.Item{{Quantity: 2, Name: "ಮಸಾಲೆ ದೋಸೆ", Notes: "ಕಡಿಮೆ ಖಾರ"}, {Quantity: 1, Name: "Filter Coffee"}}
+	id := r.srv.NewJob("demo", "p0", slip)
+	if o := r.outcome(t, id); o.Kind != "printed" {
+		t.Fatalf("outcome = %+v, want printed", o)
+	}
+	conn := <-r.conns["p0"]
+	rasters := 0
+	for _, c := range escpos.Decode(conn.Data) {
+		if c.Name == "GS v 0" {
+			rasters++
+		}
+	}
+	if rasters < 2 || !strings.Contains(ticketText(conn.Data), "1 x Filter Coffee") {
+		t.Fatalf("got %d raster lines and text %q; want Kannada as raster, English as text", rasters, ticketText(conn.Data))
 	}
 }

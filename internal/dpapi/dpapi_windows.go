@@ -1,6 +1,9 @@
 //go:build windows
 
-package pair
+// Package dpapi wraps Windows DPAPI at machine scope, without third-party
+// modules. The agent runs as a service with no user profile, so user-scope
+// DPAPI is not an option.
+package dpapi
 
 import (
 	"errors"
@@ -11,24 +14,18 @@ import (
 // DPAPI through crypt32.dll, without third-party modules.
 
 var (
-	crypt32            = syscall.NewLazyDLL("crypt32.dll")
-	kernel32           = syscall.NewLazyDLL("kernel32.dll")
-	procProtectData    = crypt32.NewProc("CryptProtectData")
-	procUnprotectData  = crypt32.NewProc("CryptUnprotectData")
-	procLocalFree      = kernel32.NewProc("LocalFree")
-	errEmptyDPAPIInput = errors.New("dpapi: empty input")
+	crypt32           = syscall.NewLazyDLL("crypt32.dll")
+	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	procProtectData   = crypt32.NewProc("CryptProtectData")
+	procUnprotectData = crypt32.NewProc("CryptUnprotectData")
+	procLocalFree     = kernel32.NewProc("LocalFree")
+	errEmptyInput     = errors.New("dpapi: empty input")
 )
 
 const (
 	cryptprotectUIForbidden  = 0x1
 	cryptprotectLocalMachine = 0x4 // machine scope: the service has no user profile
 )
-
-// entropy ties blobs to this program, so another application's machine-scope
-// DPAPI blob can't be swapped in, and ours can't be read by a tool that
-// doesn't know it. It is not a secret: anything running on the till as an
-// administrator can still decrypt, which the design accepts.
-var entropy = []byte("palate-print-agent/credential/v1")
 
 type dataBlob struct {
 	cbData uint32
@@ -45,9 +42,13 @@ func (b *dataBlob) bytes() []byte {
 	return out
 }
 
-func protect(plain []byte) ([]byte, error) {
+// Protect encrypts plain at machine scope. entropy ties the blob to one use
+// (credential, ledger), so a blob from one can't be swapped in for another.
+// It is not a secret: an administrator on the till can still decrypt, which
+// the design accepts.
+func Protect(plain, entropy []byte) ([]byte, error) {
 	if len(plain) == 0 {
-		return nil, errEmptyDPAPIInput
+		return nil, errEmptyInput
 	}
 	var out dataBlob
 	r, _, err := procProtectData.Call(
@@ -65,9 +66,10 @@ func protect(plain []byte) ([]byte, error) {
 	return out.bytes(), nil
 }
 
-func unprotect(blob []byte) ([]byte, error) {
+// Unprotect decrypts a blob made by Protect with the same entropy.
+func Unprotect(blob, entropy []byte) ([]byte, error) {
 	if len(blob) == 0 {
-		return nil, errEmptyDPAPIInput
+		return nil, errEmptyInput
 	}
 	var out dataBlob
 	r, _, err := procUnprotectData.Call(

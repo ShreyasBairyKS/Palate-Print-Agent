@@ -26,17 +26,19 @@ type Config struct {
 	Server         string    `json:"server"`          // https://..., or http:// on loopback for the rig
 	AgentName      string    `json:"agent_name"`      // shown in the portal; defaults to the hostname
 	CredentialFile string    `json:"credential_file"` // defaults to credential.bin beside the config
+	LedgerFile     string    `json:"ledger_file"`     // defaults to ledger.bin beside the config
 	Printers       []Printer `json:"printers"`
 	Timings        Timings   `json:"timings"`
 }
 
 // Printer is one printer this till owns.
 type Printer struct {
-	ID      string `json:"id"`      // what jobs name it by
-	Name    string `json:"name"`    // "Tandoor", printed on MOVED FROM banners
-	Kind    string `json:"kind"`    // "network" (USB arrives in M2)
-	Address string `json:"address"` // "192.168.1.50" or "192.168.1.50:9100"
-	Width   int    `json:"width"`   // 58 or 80
+	ID          string `json:"id"`           // what jobs name it by
+	Name        string `json:"name"`         // "Tandoor", printed on MOVED FROM banners
+	Kind        string `json:"kind"`         // "network" or "usb"
+	Address     string `json:"address"`      // network: "192.168.1.50" or "192.168.1.50:9100"
+	PrinterName string `json:"printer_name"` // usb: the printer's name in Windows
+	Width       int    `json:"width"`        // 58 or 80
 }
 
 // Timings are the agent's tunable numbers. Zero values take the defaults
@@ -101,6 +103,9 @@ func Load(path string) (*Config, error) {
 	if c.CredentialFile == "" {
 		c.CredentialFile = filepath.Join(filepath.Dir(path), "credential.bin")
 	}
+	if c.LedgerFile == "" {
+		c.LedgerFile = filepath.Join(filepath.Dir(path), "ledger.bin")
+	}
 	if c.AgentName == "" {
 		c.AgentName, _ = os.Hostname()
 	}
@@ -135,15 +140,20 @@ func (c *Config) Validate() error {
 		}
 		switch p.Kind {
 		case "network":
+			if p.PrinterName != "" {
+				return fmt.Errorf("printer %q: printer_name is for usb printers; network printers take an address", p.ID)
+			}
 			addr, err := CheckPrinterAddress(p.Address)
 			if err != nil {
 				return fmt.Errorf("printer %q: %w", p.ID, err)
 			}
 			p.Address = addr
 		case "usb":
-			return fmt.Errorf("printer %q: USB printers arrive in M2", p.ID)
+			if p.PrinterName == "" || p.Address != "" {
+				return fmt.Errorf("printer %q: usb printers take printer_name (see palate-agent printers), not an address", p.ID)
+			}
 		default:
-			return fmt.Errorf("printer %q: kind must be \"network\"", p.ID)
+			return fmt.Errorf("printer %q: kind must be \"network\" or \"usb\"", p.ID)
 		}
 	}
 	return nil

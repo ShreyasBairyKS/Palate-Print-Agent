@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.exe binary
 *.bin binary
+*.png binary
+*.ttf binary

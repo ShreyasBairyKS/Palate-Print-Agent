@@ -1,5 +1,6 @@
 // Command palate-agent is the Palate print agent.
 //
+//	palate-agent printers                  # Windows printers this process can see (for usb)
 //	palate-agent pair -code K7Q2-M9XD      # once per till, with a code from the portal
 //	palate-agent test-print -printer p-tandoor
 //	palate-agent run                       # foreground; the Windows service arrives in M4
@@ -26,7 +27,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer"
-	netprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/net"
+	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/render"
 )
 
@@ -42,6 +43,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: palate-agent <command> [flags]
 
 commands:
+  printers    list the Windows printers this process can see (for usb)
   pair        redeem a pairing code from the portal and register printers
   test-print  print a test slip on one printer
   run         poll for jobs and print them (foreground)
@@ -57,6 +59,8 @@ func main() {
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
 	switch cmd {
+	case "printers":
+		err = cmdPrinters()
 	case "pair":
 		err = cmdPair(args, log)
 	case "test-print":
@@ -82,6 +86,19 @@ func loadConfig(fs *flag.FlagSet, args []string) (*config.Config, error) {
 	return config.Load(*path)
 }
 
+func cmdPrinters() error {
+	names, err := usbprinter.List()
+	if err != nil {
+		return err
+	}
+	fmt.Println("Windows printers visible to this process (use one as printer_name for a usb printer):")
+	for _, n := range names {
+		fmt.Println("  " + n)
+	}
+	fmt.Println("The service runs as LocalSystem, which sees only printers installed for all users.")
+	return nil
+}
+
 func cmdPair(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("pair", flag.ExitOnError)
 	code := fs.String("code", "", "pairing code from the portal")
@@ -99,7 +116,11 @@ func cmdPair(args []string, log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	a := agent.New(cfg, store, log)
+	a, err := agent.New(cfg, store, log)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
 	if err := a.Cloud.RegisterPrinters(ctx, toAPI(cfg)); err != nil {
 		return fmt.Errorf("paired as %s, but registering printers failed (run will retry): %w", dev, err)
 	}
@@ -124,14 +145,12 @@ func cmdTestPrint(args []string) error {
 			Table:       "",
 			PlacedAt:    time.Now(),
 			Items: []job.Item{{Quantity: 1, Name: "Test print",
-				Notes: fmt.Sprintf("printer %s at %s, %d mm. If you can read this, it works.", p.ID, p.Address, p.Width)}},
+				Notes: fmt.Sprintf("printer %s at %s, %d mm. If you can read this, it works.", p.ID, where(p), p.Width)}},
 		}, job.Width(p.Width))
 		if err != nil {
 			return err
 		}
-		w := &netprinter.Writer{Addr: p.Address, ConnectTimeout: cfg.Timings.ConnectTimeout.D(),
-			StallTimeout: cfg.Timings.StallTimeout.D(), StatusTimeout: cfg.Timings.StatusTimeout.D()}
-		res, err := w.Write(context.Background(), data)
+		res, err := agent.WriterFor(p, cfg.Timings).Write(context.Background(), data)
 		switch {
 		case err != nil:
 			return fmt.Errorf("test print on %s failed (%s): %w", p.ID, printer.KindOf(err), err)
@@ -143,6 +162,13 @@ func cmdTestPrint(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("test-print: no printer with id %q in the config", *id)
+}
+
+func where(p config.Printer) string {
+	if p.Kind == "usb" {
+		return p.PrinterName
+	}
+	return p.Address
 }
 
 func cmdRun(args []string, log *slog.Logger) error {
@@ -158,7 +184,13 @@ func cmdRun(args []string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	log.Info("palate-agent starting", "version", agent.Version, "server", cfg.Server, "printers", len(cfg.Printers))
-	return agent.New(cfg, store, log).Run(ctx)
+	agent.CheckUSB(cfg, log)
+	a, err := agent.New(cfg, store, log)
+	if err != nil {
+		return err
+	}
+	defer a.Close()
+	return a.Run(ctx)
 }
 
 func toAPI(cfg *config.Config) []api.Printer {

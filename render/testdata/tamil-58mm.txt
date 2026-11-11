@@ -1,0 +1,27 @@
+000000  1b 40                              ESC @     initialise printer
+000002  1b 74 10                           ESC t     code page 16 WPC1252
+000005  1b 61 01                           ESC a     align centre
+000008  1d 21 11                           GS !      character size 2x wide, 2x high
+00000b  1b 45 01                           ESC E     bold on
+00000e  54 41 4e 44 4f 4f 52               text      "TANDOOR"
+000015  0a                                 LF        print and line feed
+000016  1b 45 00                           ESC E     bold off
+000019  1d 21 00                           GS !      character size 1x wide, 1x high
+00001c  1b 61 00                           ESC a     align left
+00001f  54 61 62 6c 65 20 54 34 …+24       text      "Table T4                   #1042"
+00003f  0a                                 LF        print and line feed
+000040  31 31 20 4e 6f 76 20 32 …+9        text      "11 Nov 2026 14:05"
+000051  0a                                 LF        print and line feed
+000052  2d 2d 2d 2d 2d 2d 2d 2d …+24       text      "--------------------------------"
+000072  0a                                 LF        print and line feed
+000073  1b 45 01                           ESC E     bold on
+000076  1d 76 30 00 30 00 2a 00 …+2016     GS v 0    raster image 384 x 42 dots (2016 bytes, mode 0)
+00085e  1b 45 00                           ESC E     bold off
+000861  1b 45 01                           ESC E     bold on
+000864  1d 76 30 00 30 00 2a 00 …+2016     GS v 0    raster image 384 x 42 dots (2016 bytes, mode 0)
+00104c  1b 45 00                           ESC E     bold off
+00104f  1d 76 30 00 30 00 2a 00 …+2016     GS v 0    raster image 384 x 42 dots (2016 bytes, mode 0)
+001837  2d 2d 2d 2d 2d 2d 2d 2d …+24       text      "--------------------------------"
+001857  0a                                 LF        print and line feed
+001858  1b 64 03                           ESC d     print and feed 3 lines
+00185b  1d 56 42 00                        GS V      feed 0 dots, then partial cut

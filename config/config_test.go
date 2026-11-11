@@ -60,7 +60,8 @@ func TestLoad(t *testing.T) {
 	os.WriteFile(path, []byte(`{
 		"server": "http://127.0.0.1:8080",
 		"agent_name": "till-1",
-		"printers": [{"id":"p1","name":"Tandoor","kind":"network","address":"192.168.1.50","width":80}],
+		"printers": [{"id":"p1","name":"Tandoor","kind":"network","address":"192.168.1.50","width":80},
+		             {"id":"p2","name":"Pass","kind":"usb","printer_name":"EPSON TM-T82 Receipt","width":58}],
 		"timings": {"stall_timeout": "4s"}
 	}`), 0o644)
 	c, err := Load(path)
@@ -83,7 +84,9 @@ func TestLoadRejects(t *testing.T) {
 		"public printer": `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"8.8.8.8","width":80}]}`,
 		"duplicate id":   `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80},{"id":"p1","name":"B","kind":"network","address":"10.0.0.2","width":80}]}`,
 		"bad width":      `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":72}]}`,
-		"usb in M1":      `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"usb","width":80}]}`,
+		"usb no name":    `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"usb","width":80}]}`,
+		"usb with addr":  `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"usb","printer_name":"EPSON","address":"10.0.0.1","width":80}]}`,
+		"net with name":  `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","printer_name":"EPSON","address":"10.0.0.1","width":80}]}`,
 		"no printers":    `{"server":"https://x","printers":[]}`,
 		"unknown field":  `{"server":"https://x","credential":"plaintext!","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80}]}`,
 		"bad duration":   `{"server":"https://x","printers":[{"id":"p1","name":"A","kind":"network","address":"10.0.0.1","width":80}],"timings":{"retry_gap":5}}`,

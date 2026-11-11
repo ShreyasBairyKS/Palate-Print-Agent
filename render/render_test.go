@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"flag"
+	"image"
+	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +54,41 @@ var goldenCases = map[string]func() job.Slip{
 		s.Delayed = true
 		return s
 	},
+	"kannada": func() job.Slip {
+		s := baseSlip()
+		s.Items = []job.Item{
+			{Quantity: 2, Name: "ಮಸಾಲೆ ದೋಸೆ", Notes: "ಕಡಿಮೆ ಖಾರ"},
+			{Quantity: 1, Name: "Filter Coffee"},
+			{Quantity: 3, Name: "ಈರುಳ್ಳಿ ಉತ್ತಪ್ಪ ಹೆಚ್ಚು ತುಪ್ಪದೊಂದಿಗೆ ಮತ್ತು ಕಾಯಿ ಚಟ್ನಿ"},
+		}
+		return s
+	},
+	"devanagari": func() job.Slip {
+		s := baseSlip()
+		s.Items = []job.Item{
+			{Quantity: 1, Name: "पनीर बटर मसाला", Notes: "कम तीखा"},
+			{Quantity: 2, Name: "तंदूरी रोटी"},
+		}
+		s.Notes = "जल्दी करें, मेहमान इंतज़ार कर रहे हैं"
+		return s
+	},
+	"tamil": func() job.Slip {
+		s := baseSlip()
+		s.Items = []job.Item{
+			{Quantity: 2, Name: "மசாலா தோசை"},
+			{Quantity: 1, Name: "இட்லி சாம்பார்", Notes: "கூடுதல் சட்னி"},
+		}
+		return s
+	},
+	"mixed-banners": func() job.Slip {
+		s := baseSlip()
+		s.Station = "ಅಡುಗೆಮನೆ"
+		s.MovedFrom = "ತಂದೂರ್"
+		s.Duplicate = true
+		s.DuplicateReason = "crash-recovery"
+		s.Items = []job.Item{{Quantity: 1, Name: "Veg Biryani ಮತ್ತು ರಾಯಿತ"}}
+		return s
+	},
 	"latin-accents": func() job.Slip {
 		s := baseSlip()
 		s.Station = "Pâtisserie"
@@ -77,6 +114,7 @@ func TestGolden(t *testing.T) {
 					os.MkdirAll("testdata", 0o755)
 					os.WriteFile(base+".bin", got, 0o644)
 					os.WriteFile(base+".txt", []byte(dump), 0o644)
+					writePreview(t, base+".png", got)
 					return
 				}
 				want, err := os.ReadFile(base + ".bin")
@@ -89,6 +127,48 @@ func TestGolden(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// writePreview stacks a ticket's raster lines into a PNG, so a reviewer can
+// see the shaped text. Text lines aren't drawn (the .txt dump shows them).
+func writePreview(t *testing.T, path string, ticket []byte) {
+	t.Helper()
+	var rows [][]byte
+	w := 0
+	for _, c := range escpos.Decode(ticket) {
+		if c.Name != "GS v 0" {
+			continue
+		}
+		x := int(c.Raw[4]) | int(c.Raw[5])<<8
+		h := int(c.Raw[6]) | int(c.Raw[7])<<8
+		w = x * 8
+		for y := 0; y < h; y++ {
+			rows = append(rows, c.Raw[8+y*x:8+(y+1)*x])
+		}
+		rows = append(rows, make([]byte, x)) // a gap between lines
+	}
+	if len(rows) == 0 {
+		os.Remove(path)
+		return
+	}
+	img := image.NewGray(image.Rect(0, 0, w, len(rows)))
+	for y, row := range rows {
+		for x := 0; x < w; x++ {
+			v := uint8(255)
+			if row[x/8]&(0x80>>(x%8)) != 0 {
+				v = 0
+			}
+			img.Pix[y*img.Stride+x] = v
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, img); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -123,16 +203,85 @@ func TestLinesFitThePaper(t *testing.T) {
 	}
 }
 
-func TestNonLatinNeedsRaster(t *testing.T) {
+func TestUnsupportedScriptNamesTheField(t *testing.T) {
 	s := baseSlip()
-	s.Items[1].Name = "ಮಸಾಲೆ ದೋಸೆ" // masale dose, Kannada
+	s.Items[1].Name = "麻婆豆腐" // no bundled font covers Chinese
 	_, err := Render(s, job.Width80)
-	if !errors.Is(err, ErrNeedsRaster) {
-		t.Fatalf("err = %v, want ErrNeedsRaster", err)
+	if !errors.Is(err, ErrUnsupportedScript) || !strings.Contains(err.Error(), "items[1].name") {
+		t.Fatalf("err = %v; want ErrUnsupportedScript naming items[1].name", err)
 	}
-	var ure *UnsupportedRuneError
-	if !errors.As(err, &ure) || ure.Field != "items[1].name" {
-		t.Fatalf("err = %v, want it to name items[1].name", err)
+}
+
+// M2's "done when", part 2: a Kannada slip renders identically twice, also
+// when rendered at the same moment for two printers.
+func TestKannadaRendersIdenticallyTwice(t *testing.T) {
+	mk := goldenCases["kannada"]
+	first, err := Render(mk(), job.Width80)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan []byte, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			out, err := Render(mk(), job.Width80)
+			if err != nil {
+				t.Error(err)
+			}
+			results <- out
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		if !bytes.Equal(<-results, first) {
+			t.Fatal("concurrent renders of the same Kannada slip differ")
+		}
+	}
+}
+
+func TestRasterLinesAreInkedAndPaperWide(t *testing.T) {
+	for _, name := range []string{"kannada", "devanagari", "tamil", "mixed-banners"} {
+		for _, w := range []job.Width{job.Width58, job.Width80} {
+			out, err := Render(goldenCases[name](), w)
+			if err != nil {
+				t.Fatalf("%s %s: %v", name, w, err)
+			}
+			images := 0
+			for _, c := range escpos.Decode(out) {
+				if c.Name != "GS v 0" {
+					continue
+				}
+				images++
+				x := int(c.Raw[4]) | int(c.Raw[5])<<8
+				if x*8 != columns(w)*colDots {
+					t.Errorf("%s %s: raster is %d dots wide, paper is %d", name, w, x*8, columns(w)*colDots)
+				}
+				if !anyInk(c.Raw[8:]) {
+					t.Errorf("%s %s: a raster line has no ink", name, w)
+				}
+			}
+			if images == 0 {
+				t.Errorf("%s %s: no raster lines; these slips need the raster path", name, w)
+			}
+		}
+	}
+}
+
+func anyInk(b []byte) bool {
+	for _, x := range b {
+		if x != 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLatinSlipsHaveNoRaster(t *testing.T) {
+	for _, name := range []string{"basic", "long-names", "takeaway-banners", "latin-accents"} {
+		out, _ := Render(goldenCases[name](), job.Width80)
+		for _, c := range escpos.Decode(out) {
+			if c.Name == "GS v 0" {
+				t.Errorf("%s: a Latin slip used the raster path", name)
+			}
+		}
 	}
 }
 
@@ -208,6 +357,10 @@ func TestWrap(t *testing.T) {
 
 func FuzzRender(f *testing.F) {
 	f.Add("Tandoor", "Paneer Tikka", "less spicy", 2)
+	f.Add("ಅಡುಗೆಮನೆ", "ಮಸಾಲೆ ದೋಸೆ ಮತ್ತು ಚಟ್ನಿ", "ಕಡಿಮೆ ಖಾರ", 3)
+	f.Add("रसोई", "पनीर बटर मसाला", "कम तीखा", 1)
+	f.Add("சமையல்", "மசாலா தோசை", "கூடுதல் சட்னி", 2)
+	f.Add("Pass", "Veg Biryani ಮತ್ತು रायता மற்றும்", "", 1)
 	f.Fuzz(func(t *testing.T, station, name, notes string, qty int) {
 		s := baseSlip()
 		s.Station, s.Items[0].Name, s.Items[0].Notes, s.Items[0].Quantity = station, name, notes, qty
@@ -226,4 +379,22 @@ func FuzzRender(f *testing.F) {
 			}
 		}
 	})
+}
+
+// Raster cost per ticket (the plan asks for it in M2). Run with:
+//
+//	go test ./render -run=^$ -bench=. -benchmem
+func BenchmarkRender(b *testing.B) {
+	for _, name := range []string{"basic", "kannada", "devanagari", "tamil", "mixed-banners"} {
+		for _, w := range []job.Width{job.Width58, job.Width80} {
+			b.Run(name+"-"+w.String(), func(b *testing.B) {
+				s := goldenCases[name]()
+				var out []byte
+				for b.Loop() {
+					out, _ = Render(s, w)
+				}
+				b.ReportMetric(float64(len(out)), "ticket-bytes")
+			})
+		}
+	}
 }

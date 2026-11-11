@@ -6,28 +6,34 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/api"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/ledger"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer"
 	netprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/net"
+	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/queue"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/source/cloud"
 )
 
 // Version is reported in every poll's health payload.
-const Version = "0.1.0-m1"
+const Version = "0.2.0-m2"
 
 // Agent is a configured, runnable agent.
 type Agent struct {
-	Cloud *cloud.Client
-	Queue *queue.Queue
-	Log   *slog.Logger
+	Cloud  *cloud.Client
+	Queue  *queue.Queue
+	Ledger *ledger.Ledger
+	Log    *slog.Logger
 
 	printers []api.Printer
 
@@ -35,33 +41,72 @@ type Agent struct {
 	lastErr string
 }
 
-// New builds an agent from a validated config and a credential store.
-func New(cfg *config.Config, store pair.Store, log *slog.Logger) *Agent {
+// New builds an agent from a validated config and a credential store, and
+// opens the ledger. Close releases it.
+func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	a := &Agent{Log: log}
+	led, err := ledger.Open(cfg.LedgerFile, ledger.Options{})
+	if err != nil {
+		return nil, fmt.Errorf("opening ledger %s: %w", cfg.LedgerFile, err)
+	}
+	a := &Agent{Log: log, Ledger: led}
 	var qps []queue.Printer
 	for _, p := range cfg.Printers {
-		qps = append(qps, queue.Printer{
-			ID: p.ID, Name: p.Name, Width: job.Width(p.Width),
-			Writer: &netprinter.Writer{
-				Addr:           p.Address,
-				ConnectTimeout: cfg.Timings.ConnectTimeout.D(),
-				StallTimeout:   cfg.Timings.StallTimeout.D(),
-				StatusTimeout:  cfg.Timings.StatusTimeout.D(),
-			},
-		})
+		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Writer: WriterFor(p, cfg.Timings)})
 		a.printers = append(a.printers, api.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Width: p.Width})
 	}
 	a.Cloud = &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log}
 	a.Queue = queue.New(qps, a.Cloud, queue.Config{
+		Ledger:       led,
 		FastRetries:  cfg.Timings.FastRetries,
 		RetryGap:     cfg.Timings.RetryGap.D(),
 		DelayedAfter: cfg.Timings.DelayedAfter.D(),
 		Log:          log,
 	})
-	return a
+	return a, nil
+}
+
+// Close releases the ledger. Call it after Run returns.
+func (a *Agent) Close() error { return a.Ledger.Close() }
+
+// WriterFor builds the writer for one configured printer. Network and USB
+// printers look the same to everything above this.
+func WriterFor(p config.Printer, t config.Timings) printer.Writer {
+	if p.Kind == "usb" {
+		return &usbprinter.Writer{Name: p.PrinterName, StallTimeout: t.StallTimeout.D()}
+	}
+	return &netprinter.Writer{
+		Addr:           p.Address,
+		ConnectTimeout: t.ConnectTimeout.D(),
+		StallTimeout:   t.StallTimeout.D(),
+		StatusTimeout:  t.StatusTimeout.D(),
+	}
+}
+
+// CheckUSB warns about USB printers this process can't see: the service
+// runs as LocalSystem, which only sees printers installed for all users.
+func CheckUSB(cfg *config.Config, log *slog.Logger) {
+	var want []string
+	for _, p := range cfg.Printers {
+		if p.Kind == "usb" {
+			want = append(want, p.PrinterName)
+		}
+	}
+	if len(want) == 0 {
+		return
+	}
+	seen, err := usbprinter.List()
+	if err != nil {
+		log.Warn("could not list Windows printers", "err", err)
+		return
+	}
+	for _, name := range want {
+		if !slices.Contains(seen, name) {
+			log.Warn("USB printer not visible to this process; install it for all users", "printer_name", name, "visible", seen)
+		}
+	}
 }
 
 // fatal errors stop the agent: polling again can't fix them.

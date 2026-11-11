@@ -69,6 +69,9 @@ type Config struct {
 	Mode      Mode
 	StopAfter int    // bytes read before Midstream/Drop misbehave
 	Status    Status // DLE EOT answers in Normal and Single modes
+	// OnAccept, if set, is called as each connection is accepted, before any
+	// byte is read.
+	OnAccept func(seq int)
 	// OnConn, if set, is called when each connection ends, with what was kept.
 	OnConn func(Conn)
 }
@@ -137,6 +140,9 @@ func (p *Printer) Serve(ln net.Listener) error {
 		p.conns[c] = struct{}{}
 		p.wg.Add(1)
 		p.mu.Unlock()
+		if p.cfg.OnAccept != nil {
+			p.cfg.OnAccept(seq)
+		}
 		go p.handle(c, seq)
 	}
 }

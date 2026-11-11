@@ -1,0 +1,41 @@
+000000  1b 40                              ESC @     initialise printer
+000002  1b 74 10                           ESC t     code page 16 WPC1252
+000005  1b 61 01                           ESC a     align centre
+000008  1b 45 01                           ESC E     bold on
+00000b  1d 42 01                           GS B      reverse (white on black) on
+00000e  20 44 55 50 4c 49 43 41 …+3        text      " DUPLICATE "
+000019  0a                                 LF        print and line feed
+00001a  1d 42 00                           GS B      reverse (white on black) off
+00001d  1b 45 00                           ESC E     bold off
+000020  1b 61 01                           ESC a     align centre
+000023  63 72 61 73 68 2d 72 65 …+6        text      "crash-recovery"
+000031  0a                                 LF        print and line feed
+000032  1b 61 01                           ESC a     align centre
+000035  1b 45 01                           ESC E     bold on
+000038  1d 42 01                           GS B      reverse (white on black) on
+00003b  1d 76 30 00 48 00 2f 00 …+3384     GS v 0    raster image 576 x 47 dots (3384 bytes, mode 0)
+000d7b  1d 42 00                           GS B      reverse (white on black) off
+000d7e  1b 45 00                           ESC E     bold off
+000d81  1b 61 01                           ESC a     align centre
+000d84  63 68 65 63 6b 20 66 6f …+11       text      "check for duplicate"
+000d97  0a                                 LF        print and line feed
+000d98  1b 61 01                           ESC a     align centre
+000d9b  1d 21 11                           GS !      character size 2x wide, 2x high
+000d9e  1b 45 01                           ESC E     bold on
+000da1  1d 76 30 00 48 00 4c 00 …+5472     GS v 0    raster image 576 x 76 dots (5472 bytes, mode 0)
+002309  1b 45 00                           ESC E     bold off
+00230c  1d 21 00                           GS !      character size 1x wide, 1x high
+00230f  1b 61 00                           ESC a     align left
+002312  54 61 62 6c 65 20 54 34 …+40       text      "Table T4                                   #1042"
+002342  0a                                 LF        print and line feed
+002343  31 31 20 4e 6f 76 20 32 …+9        text      "11 Nov 2026 14:05"
+002354  0a                                 LF        print and line feed
+002355  2d 2d 2d 2d 2d 2d 2d 2d …+40       text      "------------------------------------------------"
+002385  0a                                 LF        print and line feed
+002386  1b 45 01                           ESC E     bold on
+002389  1d 76 30 00 48 00 2f 00 …+3384     GS v 0    raster image 576 x 47 dots (3384 bytes, mode 0)
+0030c9  1b 45 00                           ESC E     bold off
+0030cc  2d 2d 2d 2d 2d 2d 2d 2d …+40       text      "------------------------------------------------"
+0030fc  0a                                 LF        print and line feed
+0030fd  1b 64 03                           ESC d     print and feed 3 lines
+003100  1d 56 42 00                        GS V      feed 0 dots, then partial cut
