@@ -183,8 +183,8 @@ func (s *stallWriter) Write(ctx context.Context, _ []byte) (printer.Result, erro
 	}
 }
 
-// M3's "done when", queue level: the worst case from the design plan, a
-// write that stalls for the full 10 s before the printer counts as hung.
+// M3's "done when", queue level: the worst case, a write that stalls for
+// the full 10 s before the printer counts as hung.
 func TestHangingPrinterReachesBackupWithin15s(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses the real 10 s stall timeout")

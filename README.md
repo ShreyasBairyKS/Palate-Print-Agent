@@ -2,7 +2,7 @@
 
 The Palate print agent: a Go service on the restaurant's Windows till that
 polls Palate's cloud for print jobs and writes each station's ticket to its
-printer. The design is in `../Palate print agent design plan.md`.
+printer, the moment an order is confirmed.
 
 **Status: M3.**
 
@@ -270,7 +270,7 @@ Config rules:
     another till. The agent can only use backups on its own till, and the
     server moves jobs only when a whole till goes silent, so today that
     ticket is a recorded failure. It needs a way for the agent to hand a job
-    back to the server (`backend-notes.md`).
+    back to the server, to be added to the backend API.
   - USB spooler job status: the spooler accepts jobs for an unplugged printer.
   - Small tickets to a stalled network printer show as `written`, because
     socket buffers accept them. A big one shows as `partial`.
@@ -400,12 +400,11 @@ recorded outcome shown (`TestM3EveryHostileFlagEndsInARecordedOutcome`).
 | `short-lease` | Leases for 2 s, shorter than a slow print | Ignores the redelivery while printing; the ledger stops any reprint | `written`, one copy on paper |
 | `repeat-id` | Sends each job twice in one response | Prints it once | `printed`, one copy on paper |
 
-## Provisional: what changes when the missing documents arrive
+## Provisional: what changes when the backend API is specified
 
-`backend-notes.md`, `security.md` and the intern brief were not available.
 The endpoint paths, JSON shapes, pairing-code format and error codes in
-`api/` follow the design plan's illustrative table. `backend-notes.md` wins
-on any difference.
+`api/` are a working design. Once the backend API is specified, it wins on
+any difference.
 
 Only `api/`, `source/cloud/`, `pair/redeem.go` and `internal/mockserver/`
 know the wire format. Reconciling should not touch the queue, the renderer

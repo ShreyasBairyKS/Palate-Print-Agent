@@ -43,7 +43,7 @@ type Printer struct {
 }
 
 // Timings are the agent's tunable numbers. Zero values take the defaults
-// from the design plan.
+// listed on each field.
 type Timings struct {
 	ConnectTimeout Duration `json:"connect_timeout"` // default 3s
 	StallTimeout   Duration `json:"stall_timeout"`   // write with no progress; default 10s

@@ -1,5 +1,5 @@
-// Package source defines where work comes from. It is the second seam from the
-// design plan.
+// Package source defines where work comes from. It is the second seam in the
+// architecture.
 //
 // Implementations live in subpackages: source/cloud (Palate cloud, M1) and
 // later source/offlinepos. Everything below this interface (queue, ladder,

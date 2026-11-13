@@ -2,9 +2,9 @@
 // a JobSource, the Slip inside it that Render turns into bytes, and the
 // Outcome reported back.
 //
-// This package is one of the two seams from the design plan. Changing it
-// changes the contract between the wire track and the paper track, so both
-// interns review any change here.
+// This package is one of the two seams in the architecture. Changing it
+// changes the contract between the wire track and the paper track, so
+// changes here need review from both sides.
 package job
 
 import (

@@ -3,8 +3,8 @@
 // person uses to queue jobs, issue pairing codes and switch on hostile
 // behaviour.
 //
-// PROVISIONAL: the endpoints follow package api, which follows the design
-// plan's illustrative table until backend-notes.md is available.
+// PROVISIONAL: the endpoints follow package api, which is a working design
+// until the backend API is specified.
 package mockserver
 
 import (

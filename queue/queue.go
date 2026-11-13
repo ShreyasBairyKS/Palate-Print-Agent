@@ -58,8 +58,8 @@ type Ledger interface {
 	Finish(id string, o job.Outcome) error
 }
 
-// Config holds the queue's ledger and timings. Zero timings take the design
-// plan's defaults.
+// Config holds the queue's ledger and timings. Zero timings take the
+// defaults listed on each field.
 type Config struct {
 	Ledger         Ledger         // required
 	FastRetries    int            // retries after a refused connection; default 2

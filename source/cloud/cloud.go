@@ -3,7 +3,7 @@
 // rotation.
 //
 // It is the only package that knows the wire format (from package api, which
-// is provisional until backend-notes.md is available) and the only one below
+// is provisional until the backend API is specified) and the only one below
 // the agent loop allowed to use net/http.
 package cloud
 

@@ -1,10 +1,9 @@
 // Package api is the wire format between the agent and Palate's server.
 //
-// PROVISIONAL. backend-notes.md defines the four real endpoints and wins on
-// any difference; it was not available when this was written. These paths
-// and shapes follow the design plan's illustrative table. When
-// backend-notes.md arrives, only this package, source/cloud and the mock
-// server should need to change.
+// PROVISIONAL. These paths and shapes are a working design until the backend
+// API is specified; the specification wins on any difference. Reconciling
+// should only touch this package, source/cloud, pair/redeem.go and the mock
+// server.
 package api
 
 import "time"

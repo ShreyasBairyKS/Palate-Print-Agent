@@ -388,7 +388,7 @@ func FuzzRender(f *testing.F) {
 	})
 }
 
-// Raster cost per ticket (the plan asks for it in M2). Run with:
+// Raster cost per ticket, measured in M2. Run with:
 //
 //	go test ./render -run=^$ -bench=. -benchmem
 func BenchmarkRender(b *testing.B) {

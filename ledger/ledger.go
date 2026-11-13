@@ -3,7 +3,7 @@
 // what the outcome was. It is what stops a crash from printing twice or
 // silently losing a ticket.
 //
-// The rule, from the design plan:
+// The rule:
 //
 //   - Before writing to a printer, record the job as Attempting and flush.
 //   - After the write, whatever the result, record it as Done with its

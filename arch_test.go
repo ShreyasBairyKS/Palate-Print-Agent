@@ -1,6 +1,6 @@
 package main_test
 
-// Architecture rules from the design plan, checked on every `go test ./...`.
+// Architecture rules, checked on every `go test ./...`.
 //
 //   - render opens no socket: it must not depend on net at all.
 //   - Nothing below JobSource (queue, ladder, render, printer writers) may
@@ -51,7 +51,7 @@ func TestNothingBelowJobSourceSpeaksHTTP(t *testing.T) {
 		}
 		for _, f := range r.forbidden {
 			if deps[f] {
-				t.Errorf("%s/%s depends on %s; the design plan forbids it", module, r.pkg, f)
+				t.Errorf("%s/%s depends on %s; the architecture rules forbid it", module, r.pkg, f)
 			}
 		}
 	}
