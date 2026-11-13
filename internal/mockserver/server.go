@@ -74,6 +74,9 @@ type Config struct {
 	// MaxDeliveries is how many times a job is leased without an outcome
 	// before the server records it as failed (a poison job). Default 5.
 	MaxDeliveries int
+	// PrinterControl maps printer ids to fake printer control URLs, for the
+	// demo page (rig only). Empty means the page shows no printer controls.
+	PrinterControl map[string]string
 }
 
 type jobState string
@@ -91,6 +94,7 @@ type device struct {
 	Credential  string
 	Pending     string // rotated credential not yet used
 	Revoked     bool
+	Silenced    bool // demo: requests fail as if this till's network were down
 	Printers    []api.Printer
 	Health      api.Health
 	LastPoll    time.Time
@@ -182,6 +186,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /mock/devices/{id}/revoke", s.handleRevoke)
 	s.mux.HandleFunc("POST /mock/devices/{id}/rotate", s.handleRotate)
 	s.mux.HandleFunc("PUT /mock/backups", s.handleBackups)
+	s.mux.HandleFunc("POST /mock/devices/{id}/silence", s.handleSilence)
+	s.addDemoRoutes()
 
 	go s.expireLeases()
 	return s
@@ -428,6 +434,13 @@ func (s *Server) handlePoll(w http.ResponseWriter, r *http.Request) {
 	d.LastPoll = time.Now()
 
 	for {
+		if d.Silenced {
+			// The till's network was cut while this poll was held: a real
+			// response would never arrive, so hand out nothing.
+			s.mu.Unlock()
+			writeError(w, http.StatusServiceUnavailable, "unavailable", "network down (silenced from the demo page)")
+			return
+		}
 		jobs := s.leaseLocked(d)
 		if len(jobs) > 0 {
 			hostile := s.copyHostileLocked()
@@ -618,6 +631,13 @@ func (s *Server) authLocked(w http.ResponseWriter, r *http.Request) (*device, bo
 		writeError(w, http.StatusUnauthorized, "repair_needed", "credential revoked; re-pair this till")
 		return nil, false
 	}
+	if d.Silenced {
+		// Demo control: behave as if this till's network were down. Its polls
+		// fail and its last-poll time stops moving, so the till-not-answering
+		// rule takes over.
+		writeError(w, http.StatusServiceUnavailable, "unavailable", "network down (silenced from the demo page)")
+		return nil, false
+	}
 	if cred == d.Pending {
 		delete(s.byCred, d.Credential)
 		d.credHistory = append(d.credHistory, d.Credential)
@@ -708,6 +728,24 @@ func (s *Server) handleRevoke(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) handleSilence(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		On bool `json:"on"`
+	}
+	if !decode(w, r, &req) {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d, ok := s.devices[r.PathValue("id")]
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", "no such device")
+		return
+	}
+	d.Silenced = req.On
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -726,10 +764,11 @@ func (s *Server) handleRotate(w http.ResponseWriter, r *http.Request) {
 
 // State is a snapshot for tests and for people watching the mock.
 type State struct {
-	Devices []DeviceState `json:"devices"`
-	Jobs    []JobState    `json:"jobs"`
-	Hostile []Flag        `json:"hostile"`
-	Alerts  []string      `json:"alerts"`
+	Devices []DeviceState     `json:"devices"`
+	Jobs    []JobState        `json:"jobs"`
+	Hostile []Flag            `json:"hostile"`
+	Alerts  []string          `json:"alerts"`
+	Backups map[string]string `json:"backups"`
 }
 
 type DeviceState struct {
@@ -737,6 +776,7 @@ type DeviceState struct {
 	Restaurant string        `json:"restaurant"`
 	Name       string        `json:"name"`
 	Revoked    bool          `json:"revoked"`
+	Silenced   bool          `json:"silenced"`
 	Rotating   bool          `json:"rotating"`
 	Printers   []api.Printer `json:"printers"`
 	Health     api.Health    `json:"health"`
@@ -747,6 +787,11 @@ type JobState struct {
 	ID         string              `json:"id"`
 	Restaurant string              `json:"restaurant"`
 	PrinterID  string              `json:"printer_id"`
+	Order      string              `json:"order_number"`
+	Station    string              `json:"station"`
+	Table      string              `json:"table,omitempty"`
+	Items      int                 `json:"items"`
+	CreatedAt  time.Time           `json:"created_at"`
 	State      string              `json:"state"`
 	LeasedTo   string              `json:"leased_to,omitempty"`
 	Deliveries int                 `json:"deliveries"`
@@ -761,10 +806,13 @@ type JobState struct {
 func (s *Server) Snapshot() State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	st := State{Devices: []DeviceState{}, Jobs: []JobState{}, Hostile: []Flag{}, Alerts: append([]string{}, s.alerts...)}
+	st := State{Devices: []DeviceState{}, Jobs: []JobState{}, Hostile: []Flag{}, Alerts: append([]string{}, s.alerts...), Backups: map[string]string{}}
+	for k, v := range s.backups {
+		st.Backups[k] = v
+	}
 	for _, d := range s.devices {
 		st.Devices = append(st.Devices, DeviceState{
-			ID: d.ID, Restaurant: d.Restaurant, Name: d.Name, Revoked: d.Revoked,
+			ID: d.ID, Restaurant: d.Restaurant, Name: d.Name, Revoked: d.Revoked, Silenced: d.Silenced,
 			Rotating: d.Pending != "", Printers: d.Printers, Health: d.Health, LastPoll: d.LastPoll,
 		})
 	}
@@ -773,6 +821,8 @@ func (s *Server) Snapshot() State {
 		j := s.jobs[id]
 		st.Jobs = append(st.Jobs, JobState{
 			ID: id, Restaurant: j.Restaurant, PrinterID: j.Job.PrinterID, State: string(j.State),
+			Order: j.Job.Slip.OrderNumber, Station: j.Job.Slip.Station, Table: j.Job.Slip.Table,
+			Items: len(j.Job.Slip.Items), CreatedAt: j.Job.CreatedAt,
 			LeasedTo: j.LeasedTo, Deliveries: j.Deliveries, Reports: j.Reports, Outcome: j.Outcome,
 			RecordedBy: j.RecordedBy, MovedFrom: j.MovedFrom, MovedTill: j.MovedFromTill, Late: j.LateOutcome,
 		})

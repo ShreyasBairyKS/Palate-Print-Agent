@@ -34,9 +34,13 @@ const (
 	Midstream Mode = "midstream"
 	// Drop reads StopAfter bytes, then resets the connection (partial write).
 	Drop Mode = "drop"
+	// Off stops listening altogether, like a printer that is switched off:
+	// connections are refused before anything is sent. Switching to another
+	// mode listens again on the same address.
+	Off Mode = "off"
 )
 
-var Modes = []Mode{Normal, Refuse, Discard, Single, Stall, Midstream, Drop}
+var Modes = []Mode{Normal, Refuse, Discard, Single, Stall, Midstream, Drop, Off}
 
 func ParseMode(s string) (Mode, error) {
 	for _, m := range Modes {
@@ -99,6 +103,8 @@ type Printer struct {
 	seq    int
 	closed bool
 	done   chan struct{}
+	addr   string        // where Serve listens, to listen again after Off
+	wake   chan struct{} // closed when the printer is switched back on
 	wg     sync.WaitGroup
 }
 
@@ -122,15 +128,37 @@ func New(cfg Config) (*Printer, error) {
 func (p *Printer) Serve(ln net.Listener) error {
 	p.mu.Lock()
 	p.ln = ln
+	p.addr = ln.Addr().String()
+	if p.cfg.Mode == Off {
+		p.wake = make(chan struct{})
+		ln.Close()
+	}
 	p.mu.Unlock()
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			p.mu.Lock()
-			closed := p.closed
+			closed, off, wake := p.closed, p.cfg.Mode == Off, p.wake
 			p.mu.Unlock()
 			if closed {
 				return nil
+			}
+			if off && wake != nil {
+				// Switched off: wait to be switched back on, then listen again.
+				select {
+				case <-wake:
+				case <-p.done:
+					return nil
+				}
+				nl, err := net.Listen("tcp", p.addr)
+				if err != nil {
+					return err
+				}
+				p.mu.Lock()
+				p.ln = nl
+				p.mu.Unlock()
+				ln = nl
+				continue
 			}
 			return err
 		}
@@ -167,8 +195,51 @@ func (p *Printer) Close() error {
 	return nil
 }
 
+// SetMode changes how new connections are treated, while the printer runs.
+// Connections already open keep the mode they started with.
+func (p *Printer) SetMode(m Mode, stopAfter int) error {
+	if _, err := ParseMode(string(m)); err != nil {
+		return err
+	}
+	if stopAfter < 0 {
+		return errors.New("StopAfter must be >= 0")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	prev := p.cfg.Mode
+	p.cfg.Mode, p.cfg.StopAfter = m, stopAfter
+	switch {
+	case m == Off && prev != Off && p.ln != nil:
+		p.wake = make(chan struct{})
+		p.ln.Close() // Serve sees the error and waits on wake
+	case m != Off && prev == Off && p.wake != nil:
+		close(p.wake)
+		p.wake = nil
+	}
+	return nil
+}
+
+// SetStatus changes the DLE EOT answers, while the printer runs.
+func (p *Printer) SetStatus(s Status) error {
+	if _, err := ParseStatus(string(s)); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cfg.Status = s
+	return nil
+}
+
+// Settings reports the current mode, status and StopAfter.
+func (p *Printer) Settings() (Mode, Status, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cfg.Mode, p.cfg.Status, p.cfg.StopAfter
+}
+
 func (p *Printer) handle(c net.Conn, seq int) {
-	rec := Conn{Seq: seq, Remote: c.RemoteAddr().String(), Mode: p.cfg.Mode, Started: time.Now()}
+	mode, _, stopAfter := p.Settings()
+	rec := Conn{Seq: seq, Remote: c.RemoteAddr().String(), Mode: mode, Started: time.Now()}
 	defer func() {
 		c.Close()
 		rec.Ended = time.Now()
@@ -181,7 +252,7 @@ func (p *Printer) handle(c net.Conn, seq int) {
 		p.wg.Done()
 	}()
 
-	switch p.cfg.Mode {
+	switch mode {
 	case Refuse:
 		reset(c)
 		rec.Note = "reset on accept"
@@ -196,12 +267,12 @@ func (p *Printer) handle(c net.Conn, seq int) {
 		p.holdOpen()
 
 	case Midstream:
-		rec.Data, rec.Read = readUpTo(c, p.cfg.StopAfter)
+		rec.Data, rec.Read = readUpTo(c, stopAfter)
 		rec.Note = fmt.Sprintf("went silent after %d bytes", rec.Read)
 		p.holdOpen()
 
 	case Drop:
-		rec.Data, rec.Read = readUpTo(c, p.cfg.StopAfter)
+		rec.Data, rec.Read = readUpTo(c, stopAfter)
 		reset(c)
 		rec.Note = fmt.Sprintf("reset after %d bytes", rec.Read)
 
@@ -241,7 +312,8 @@ func (p *Printer) serveNormal(c net.Conn) ([]byte, int) {
 			data = append(data, chunk...)
 			for _, b := range chunk {
 				if fn, ok := q.feed(b); ok {
-					if reply, ok := statusReply(p.cfg.Status, fn); ok {
+					_, status, _ := p.Settings()
+					if reply, ok := statusReply(status, fn); ok {
 						c.Write([]byte{reply})
 					}
 				}

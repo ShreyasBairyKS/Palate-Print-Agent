@@ -25,6 +25,7 @@ func start(t *testing.T, cfg Config) (string, <-chan Conn) {
 	}
 	go p.Serve(ln)
 	t.Cleanup(func() { p.Close() })
+	printers[ln.Addr().String()] = p
 	return ln.Addr().String(), done
 }
 

@@ -1,0 +1,546 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Palate print agent · live demo</title>
+<style>
+  :root {
+    --bg: #f4f3ef; --panel: #ffffff; --ink: #1f1e1c; --muted: #6b6862; --line: #e3e0d8; --soft: #f6f5f1;
+    --blue: #3b67b0; --blue-bg: #e8eef8; --green: #1d7a45; --green-bg: #e3f3e8; --teal: #146f74; --teal-bg: #def2f2;
+    --amber: #96610b; --amber-bg: #fbefd9; --red: #b0362a; --red-bg: #fbe5e2; --grey-bg: #ecebe6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 18px; padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { font: 400 20px Georgia, serif; margin: 0; white-space: nowrap; }
+  header h1 b { font-weight: 400; color: var(--blue); }
+  .conn { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; }
+  .dot.off { background: var(--red); }
+  .stats { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+  .stat { background: var(--soft); border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; font-size: 12px; color: var(--muted); }
+  .stat b { color: var(--ink); font-size: 14px; margin-right: 3px; }
+  main { display: grid; grid-template-columns: 370px minmax(420px, 1fr) 390px; gap: 14px; padding: 14px 20px; align-items: start; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin-bottom: 14px; }
+  .panel h2 { font: 600 13px "Segoe UI", sans-serif; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+  .panel h2 .hint { text-transform: none; letter-spacing: 0; font-weight: 400; margin-left: auto; font-size: 12px; }
+  label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 3px; }
+  input, select, textarea { font: inherit; font-size: 13px; border: 1px solid #d3cfc5; border-radius: 5px; padding: 5px 7px; background: #fff; color: var(--ink); width: 100%; }
+  input:focus, select:focus { outline: 2px solid var(--blue-bg); border-color: var(--blue); }
+  button { font: inherit; font-size: 13px; border: 1px solid #cfcabe; background: var(--soft); color: var(--ink); border-radius: 5px; padding: 5px 11px; cursor: pointer; white-space: nowrap; }
+  button:hover { background: #ecebe6; }
+  button.primary { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+  button.primary:hover { background: #315a9c; }
+  button.danger { color: var(--red); }
+  button.small { font-size: 12px; padding: 2px 8px; }
+  .row { display: flex; gap: 8px; align-items: end; margin-bottom: 8px; }
+  .row > * { flex: 1; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .items { display: grid; grid-template-columns: 46px 1fr 30px; gap: 6px 6px; margin-bottom: 8px; }
+  .item { display: contents; }
+  .item .sub { grid-column: 2 / 4; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+  .x { padding: 2px 0; color: var(--muted); }
+  .actions { display: flex; gap: 8px; margin-top: 10px; }
+  .actions .primary { flex: 1; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 600; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; padding: 6px 6px; border-bottom: 1px solid var(--line); }
+  td { padding: 7px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.fresh td { animation: flash 1.6s ease-out; }
+  @keyframes flash { from { background: #fff7d6; } to { background: transparent; } }
+  .chip { display: inline-block; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--grey-bg); color: var(--muted); white-space: nowrap; }
+  .chip.printed { background: var(--green-bg); color: var(--green); }
+  .chip.written { background: var(--teal-bg); color: var(--teal); }
+  .chip.fallback { background: var(--amber-bg); color: var(--amber); }
+  .chip.failed { background: var(--red-bg); color: var(--red); }
+  .chip.leased { background: var(--blue-bg); color: var(--blue); }
+  .chip.up { background: var(--green-bg); color: var(--green); }
+  .chip.down { background: var(--red-bg); color: var(--red); }
+  .reason { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
+  .warn { color: var(--amber); font-size: 12px; margin-top: 2px; }
+  .empty { color: var(--muted); font-size: 13px; padding: 16px 4px; text-align: center; }
+  .card { border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; margin-bottom: 8px; background: var(--soft); }
+  .card .top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .card .name { font-weight: 600; }
+  .card .meta { color: var(--muted); font-size: 12px; }
+  .card .top .chip { margin-left: auto; }
+  .card .ctl { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .flags label { display: flex; gap: 8px; align-items: flex-start; color: var(--ink); font-size: 13px; margin-bottom: 7px; cursor: pointer; }
+  .flags input { width: auto; margin-top: 3px; }
+  .flags small { display: block; color: var(--muted); font-size: 12px; }
+  .alerts { max-height: 220px; overflow: auto; font-size: 12px; }
+  .alerts div { padding: 5px 0; border-bottom: 1px solid var(--line); color: var(--amber); }
+  .paper { padding: 0 20px 30px; }
+  .paper h2 { font: 400 18px Georgia, serif; margin: 6px 0 10px; }
+  .rolls { display: flex; gap: 18px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+  .roll { flex: none; }
+  .roll .head { font-weight: 600; margin-bottom: 6px; display: flex; gap: 8px; align-items: center; }
+  .receipt { background: #fffefa; box-shadow: 0 1px 4px rgba(0,0,0,.12); padding: 14px 12px 6px; margin-bottom: 4px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 13.3px; line-height: 1.35; color: #111; }
+  .receipt .l { white-space: pre; min-height: 1.35em; }
+  .receipt .b { font-weight: 700; }
+  .receipt .d { font-size: 26px; line-height: 1.25; font-weight: 700; }
+  .receipt .rv span { background: #111; color: #fffefa; padding: 0 2px; }
+  .receipt .c { text-align: center; }
+  .receipt .r { text-align: right; }
+  .receipt img { display: block; image-rendering: pixelated; }
+  .receipt .cut { border-top: 1px dashed #b9b4a8; margin: 8px -12px 0; text-align: center; font: 11px "Segoe UI", sans-serif; color: #9a958a; padding-top: 2px; }
+  .ticketmeta { font-size: 11px; color: var(--muted); margin: 0 0 14px; max-width: 420px; }
+  .probe { background: var(--soft); color: var(--muted); border: 1px dashed var(--line); border-radius: 4px; padding: 8px 12px; font-size: 12px; margin-bottom: 4px; }
+  .nopaper { background: var(--red-bg); color: var(--red); border-radius: 4px; padding: 10px 12px; font-size: 12px; margin-bottom: 4px; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: #1f1e1c; color: #fff; padding: 8px 16px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; }
+  .banner { display: none; background: var(--red-bg); color: var(--red); padding: 8px 20px; font-size: 13px; }
+  .banner.show { display: block; }
+  @media (max-width: 1250px) { main { grid-template-columns: 1fr 1fr; } main > .col3 { grid-column: 1 / 3; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } }
+  @media (max-width: 800px) { main { grid-template-columns: 1fr; } main > .col3 { grid-column: auto; display: block; } }
+</style>
+</head>
+<body>
+<header>
+  <h1><b>Palate</b> print agent · live demo</h1>
+  <span class="conn"><span class="dot" id="conn-dot"></span><span id="conn-text">connecting…</span></span>
+  <div class="stats" id="stats"></div>
+</header>
+<div class="banner" id="banner">Can't reach the mock server. Is <code>mockpalate</code> still running?</div>
+
+<main>
+  <div class="col1">
+    <section class="panel">
+      <h2>New order <span class="hint">splits into one ticket per station</span></h2>
+      <div class="presets">
+        <button class="small" data-preset="rush">Rush (3 stations)</button>
+        <button class="small" data-preset="kannada">ಕನ್ನಡ</button>
+        <button class="small" data-preset="hindi">हिन्दी</button>
+        <button class="small" data-preset="tamil">தமிழ்</button>
+        <button class="small" data-preset="accents">Café</button>
+      </div>
+      <div class="row">
+        <div><label for="table">Table</label><input id="table" value="T4"></div>
+        <div><label for="order">Order no.</label><input id="order" value="1001"></div>
+      </div>
+      <label>Items</label>
+      <div class="items" id="items"></div>
+      <button class="small" id="add-item">+ Add item</button>
+      <div style="margin-top:10px"><label for="note">Order note</label><input id="note" placeholder="e.g. birthday table, cake last"></div>
+      <div class="actions">
+        <button class="primary" id="send">Confirm order</button>
+        <button id="clear">Clear</button>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>Server mode <span class="hint">hostile behaviour</span></h2>
+      <div class="flags" id="flags"></div>
+    </section>
+  </div>
+
+  <div class="col2">
+    <section class="panel">
+      <h2>Tickets <span class="hint" id="tickets-hint"></span></h2>
+      <div id="jobs"></div>
+    </section>
+  </div>
+
+  <div class="col3">
+    <section class="panel">
+      <h2>Printers <span class="hint">switch one off to see the backup</span></h2>
+      <div id="printers"></div>
+    </section>
+    <section class="panel">
+      <h2>Tills</h2>
+      <div id="tills"></div>
+    </section>
+    <section class="panel">
+      <h2>Alerts</h2>
+      <div class="alerts" id="alerts"></div>
+    </section>
+  </div>
+</main>
+
+<section class="paper">
+  <h2>What came out of each printer</h2>
+  <div class="rolls" id="rolls"></div>
+</section>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let state = { devices: [], jobs: [], hostile: [], alerts: [], backups: {} };
+let config = { printers: [], not_answering: 60 };
+let seenJobs = new Set();
+let firstLoad = true;
+const tickets = {};       // printer id -> tickets
+const printerCtl = {};    // printer id -> control state
+const MODES = [
+  ["normal", "Working"],
+  ["off", "Switched off"],
+  ["refuse", "Resets connections"],
+  ["stall", "Hung (accepts, never reads)"],
+  ["drop", "Drops mid-ticket"],
+  ["midstream", "Freezes mid-ticket"],
+  ["discard", "Swallows tickets silently"],
+  ["single", "One connection at a time"],
+];
+const STATUSES = [["ok", "Status: answers OK"], ["paper-out", "Status: paper out"], ["none", "Status: never answers"]];
+const FLAGS = [
+  ["ip-in-job", "Send a printer address in each job", "The agent must refuse it."],
+  ["raw-bytes", "Send raw printer bytes in each job", "The agent must refuse it."],
+  ["huge-payload", "Send a 50 MB response", "The agent stops reading at 1 MiB."],
+  ["drop-midway", "Cut responses off halfway", "The agent backs off and retries."],
+  ["short-lease", "2-second leases", "A slow print must still print once."],
+  ["repeat-id", "Send every job twice", "Must print once."],
+];
+const PRESETS = {
+  rush: [[2, "Paneer Tikka", "less spicy", "Tandoor"], [4, "Butter Naan", "", "Tandoor"], [1, "Veg Hakka Noodles", "no onion", "Wok"], [2, "Masala Chai", "", "Pass"]],
+  kannada: [[2, "ಮಸಾಲೆ ದೋಸೆ", "ಕಡಿಮೆ ಖಾರ", "Tandoor"], [1, "Filter Coffee", "", "Tandoor"], [3, "ಈರುಳ್ಳಿ ಉತ್ತಪ್ಪ", "ಹೆಚ್ಚು ತುಪ್ಪ", "Tandoor"]],
+  hindi: [[1, "पनीर बटर मसाला", "कम तीखा", "Tandoor"], [2, "तंदूरी रोटी", "", "Tandoor"]],
+  tamil: [[2, "மசாலா தோசை", "", "Wok"], [1, "இட்லி சாம்பார்", "கூடுதல் சட்னி", "Wok"]],
+  accents: [[1, "Café crème brûlée", "extra caramel", "Pass"], [2, "Jalapeño poppers", "", "Wok"]],
+};
+
+// --- data -------------------------------------------------------------------
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (!r.ok && r.status !== 204) {
+    let msg = r.status + "";
+    try { msg = (await r.json()).message || msg; } catch {}
+    throw new Error(msg);
+  }
+  return r.status === 204 ? null : r.json().catch(() => null);
+}
+
+function printers() {
+  // Every printer some till registered, with its till.
+  const out = [];
+  for (const d of state.devices) {
+    for (const p of d.printers || []) {
+      const h = (d.health.printers || []).find((x) => x.id === p.id);
+      out.push({ ...p, till: d, health: h ? h.state : "unknown", lastError: h ? h.last_error : "" });
+    }
+  }
+  for (const c of config.printers) {
+    if (!out.find((p) => p.id === c.id)) out.push({ id: c.id, name: (printerCtl[c.id] || {}).name || c.id, width: 80, health: "unknown" });
+  }
+  return out;
+}
+
+function nameOf(id) {
+  const p = printers().find((x) => x.id === id);
+  return p ? p.name : id;
+}
+
+function tillState(d) {
+  if (d.revoked) return ["revoked", "failed"];
+  if (d.silenced) return ["network cut", "down"];
+  if (!d.last_poll || d.last_poll.startsWith("0001")) return ["never polled", ""];
+  const age = (Date.now() - Date.parse(d.last_poll)) / 1000;
+  if (age > config.not_answering) return ["not answering", "down"];
+  return ["polling", "up"];
+}
+
+async function refreshState() {
+  try {
+    state = await api("/mock/state");
+    $("banner").classList.remove("show");
+    $("conn-dot").classList.remove("off");
+    $("conn-text").textContent = "mock server connected";
+  } catch (e) {
+    $("banner").classList.add("show");
+    $("conn-dot").classList.add("off");
+    $("conn-text").textContent = "disconnected";
+    return;
+  }
+  renderStats(); renderJobs(); renderTills(); renderFlags(); renderAlerts(); renderPrinters(); fillStationSelects();
+  firstLoad = false;
+}
+
+async function refreshTickets() {
+  for (const c of config.printers) {
+    try {
+      tickets[c.id] = (await api(`/mock/printer-control/${encodeURIComponent(c.id)}/tickets`)).tickets;
+    } catch { tickets[c.id] = null; }
+  }
+  renderRolls();
+}
+
+async function refreshPrinterCtl() {
+  for (const c of config.printers) {
+    try { printerCtl[c.id] = await api(`/mock/printer-control/${encodeURIComponent(c.id)}/state`); }
+    catch { printerCtl[c.id] = null; }
+  }
+  renderPrinters();
+}
+
+// --- rendering ----------------------------------------------------------------
+
+function renderStats() {
+  const done = state.jobs.filter((j) => j.outcome);
+  const count = (k) => done.filter((j) => j.outcome.kind === k).length;
+  const items = [["tickets", state.jobs.length], ["printed", count("printed")], ["written", count("written")],
+    ["fallback", count("fallback")], ["failed", count("failed")], ["waiting", state.jobs.length - done.length]];
+  $("stats").innerHTML = items.map(([k, v]) => `<span class="stat"><b>${v}</b>${k}</span>`).join("");
+}
+
+function outcomeChip(j) {
+  if (!j.outcome) return j.state === "leased" ? `<span class="chip leased">printing…</span>` : `<span class="chip">queued</span>`;
+  return `<span class="chip ${esc(j.outcome.kind)}">${esc(j.outcome.kind.replace("_", " "))}</span>`;
+}
+
+function renderJobs() {
+  const jobs = [...state.jobs].reverse().slice(0, 60);
+  $("tickets-hint").textContent = state.jobs.length ? `newest first · ${state.jobs.length} total` : "";
+  if (!jobs.length) {
+    $("jobs").innerHTML = `<div class="empty">No tickets yet. Confirm an order on the left.</div>`;
+    return;
+  }
+  const rows = jobs.map((j) => {
+    const fresh = !firstLoad && !seenJobs.has(j.id + (j.outcome ? j.outcome.kind : j.state));
+    seenJobs.add(j.id + (j.outcome ? j.outcome.kind : j.state));
+    const t = j.created_at ? new Date(j.created_at).toLocaleTimeString() : "";
+    let detail = "";
+    if (j.outcome && j.outcome.reason) detail += `<div class="reason">${esc(j.outcome.reason)}</div>`;
+    if (j.moved_from) detail += `<div class="warn">moved from ${esc(nameOf(j.moved_from))} (till ${esc(j.moved_from_till)} not answering)</div>`;
+    if (j.late_outcome) detail += `<div class="warn">original till also reported ${esc(j.late_outcome.kind)}: check for a duplicate</div>`;
+    if (j.deliveries > 1) detail += `<div class="reason">delivered ${j.deliveries} times</div>`;
+    const where = j.outcome && j.outcome.printer_id ? nameOf(j.outcome.printer_id) : nameOf(j.printer_id);
+    const by = j.recorded_by ? `<div class="reason">by ${esc(j.recorded_by)}</div>` : "";
+    return `<tr class="${fresh ? "fresh" : ""}">
+      <td style="white-space:nowrap">${esc(t)}<div class="reason">${esc(j.id)}</div></td>
+      <td><b>#${esc(j.order_number)}</b>${j.table ? `<div class="reason">${esc(j.table)}</div>` : ""}</td>
+      <td>${esc(j.station)}<div class="reason">${j.items} item${j.items === 1 ? "" : "s"}</div></td>
+      <td>${outcomeChip(j)}${by}</td>
+      <td>${j.outcome ? esc(where) : ""}${detail}</td></tr>`;
+  });
+  $("jobs").innerHTML = `<table><thead><tr><th>Time</th><th>Order</th><th>Station</th><th>Outcome</th><th>Printed on · details</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+
+function renderPrinters() {
+  const list = printers();
+  if (!list.length) { $("printers").innerHTML = `<div class="empty">No printers yet. Start an agent.</div>`; return; }
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#printers")) return;
+  $("printers").innerHTML = list.map((p) => {
+    const ctl = printerCtl[p.id];
+    const local = p.till ? (p.till.printers || []) : [];
+    const chip = `<span class="chip ${p.health === "up" ? "up" : p.health === "down" ? "down" : ""}">${esc(p.health)}${p.lastError && p.health === "down" ? ": " + esc(p.lastError) : ""}</span>`;
+    const others = list.filter((o) => o.till && p.till && o.till.id !== p.till.id);
+    const backup = state.backups[p.id] || "";
+    const backupSel = others.length ? `<div style="margin-top:6px"><label>If this till goes silent, move its tickets to</label>
+      <select data-backup="${esc(p.id)}"><option value="">(no backup on another till)</option>${others.map((o) =>
+        `<option value="${esc(o.id)}" ${o.id === backup ? "selected" : ""}>${esc(o.name)} on ${esc(o.till.name)}</option>`).join("")}</select></div>` : "";
+    const controls = ctl ? `<div class="ctl">
+        <select data-mode="${esc(p.id)}">${MODES.map(([v, l]) => `<option value="${v}" ${ctl.mode === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+        <select data-status="${esc(p.id)}">${STATUSES.map(([v, l]) => `<option value="${v}" ${ctl.status === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+      </div>` : `<div class="meta">${config.printers.find((c) => c.id === p.id) ? "fake printer control not answering" : "real printer (no remote control)"}</div>`;
+    return `<div class="card"><div class="top"><span class="name">${esc(p.name)}</span>
+        <span class="meta">${esc(p.id)} · ${esc(p.kind || "")} ${p.width || ""} mm${p.till ? " · " + esc(p.till.name) : ""}</span>${chip}</div>
+        ${controls}${backupSel}</div>`;
+  }).join("");
+}
+
+function renderTills() {
+  if (!state.devices.length) { $("tills").innerHTML = `<div class="empty">No tills paired yet.</div>`; return; }
+  $("tills").innerHTML = state.devices.map((d) => {
+    const [label, cls] = tillState(d);
+    const age = d.last_poll && !d.last_poll.startsWith("0001") ? Math.round((Date.now() - Date.parse(d.last_poll)) / 1000) + " s ago" : "never";
+    const h = d.health || {};
+    return `<div class="card"><div class="top"><span class="name">${esc(d.name || d.id)}</span>
+        <span class="meta">${esc(d.id)}</span><span class="chip ${cls}">${esc(label)}</span></div>
+      <div class="meta">last poll ${esc(age)} · agent ${esc(h.agent_version || "?")} · queue ${h.queue_depth ?? 0}${h.watchdog_restarts ? " · watchdog restarts " + h.watchdog_restarts : ""}</div>
+      <div class="meta">printers: ${(d.printers || []).map((p) => esc(p.name)).join(", ") || "none"}</div>
+      ${h.last_error ? `<div class="reason">last error: ${esc(h.last_error)}</div>` : ""}
+      <div class="actions">
+        ${d.revoked ? "" : `<button class="small" data-silence="${esc(d.id)}" data-on="${d.silenced ? "0" : "1"}">${d.silenced ? "Restore network" : "Cut network"}</button>`}
+        ${d.revoked ? `<span class="meta">revoked: re-pair needed</span>` : `<button class="small danger" data-revoke="${esc(d.id)}">Revoke</button>`}
+      </div></div>`;
+  }).join("");
+}
+
+function renderFlags() {
+  if (document.activeElement && document.activeElement.closest && document.activeElement.closest("#flags")) return;
+  $("flags").innerHTML = FLAGS.map(([f, label, hint]) =>
+    `<label><input type="checkbox" data-flag="${f}" ${state.hostile.includes(f) ? "checked" : ""}><span>${label}<small>${hint}</small></span></label>`).join("");
+}
+
+function renderAlerts() {
+  const a = [...state.alerts].reverse();
+  $("alerts").innerHTML = a.length ? a.map((x) => `<div>${esc(x)}</div>`).join("") : `<div class="empty" style="color:var(--muted)">No alerts.</div>`;
+}
+
+function receiptHTML(t, widthMM) {
+  const px = widthMM === 58 ? 256 : 384;      // 12 dots per column, two thirds of a pixel per dot
+  const tl = t.lines || [];
+  if (!tl.length && t.kept > 0) return `<div class="probe" style="width:${px + 24}px">Status check from the agent (no ticket)</div>`;
+  if (!tl.length) return `<div class="nopaper" style="width:${px + 24}px">Nothing printed: ${esc(t.note)}</div>`;
+  const lines = tl.map((l) => {
+    if (l.kind === "cut") return `<div class="cut">✂ cut</div>`;
+    if (l.kind === "image") return `<img src="${l.image}" style="width:${Math.round(l.width * 2 / 3)}px" alt="raster line">`;
+    const cls = ["l", l.bold ? "b" : "", l.double ? "d" : "", l.reverse ? "rv" : "", l.align === "centre" ? "c" : l.align === "right" ? "r" : ""].join(" ");
+    return `<div class="${cls}">${l.reverse ? `<span>${esc(l.text)}</span>` : esc(l.text)}</div>`;
+  }).join("");
+  return `<div class="receipt" style="width:${px + 24}px">${lines}</div>`;
+}
+
+function renderRolls() {
+  if (!config.printers.length) {
+    $("rolls").innerHTML = `<div class="empty">No fake printers are connected to this page. Start the demo with <code>scripts/demo-live.sh</code>.</div>`;
+    return;
+  }
+  const list = printers();
+  $("rolls").innerHTML = config.printers.map((c) => { try {
+    const p = list.find((x) => x.id === c.id) || { name: c.id, width: 80 };
+    const ctl = printerCtl[c.id];
+    const ts = tickets[c.id];
+    const mode = ctl ? (MODES.find(([v]) => v === ctl.mode) || [, ctl.mode])[1] : "";
+    let body;
+    if (ts === null || ts === undefined) body = `<div class="empty">printer control not answering</div>`;
+    else if (!ts.length) body = `<div class="empty" style="width:${(p.width === 58 ? 256 : 384) + 24}px">No paper yet.</div>`;
+    else body = ts.slice(0, 6).map((t) => receiptHTML(t, p.width) +
+      `<div class="ticketmeta">#${t.seq} · ${new Date(t.at).toLocaleTimeString()} · ${t.read} bytes · ${esc(t.note)} · ${t.millis} ms</div>`).join("");
+    return `<div class="roll"><div class="head">${esc(p.name)} <span class="chip">${esc(mode)}</span>
+      <button class="small" data-clearpaper="${esc(c.id)}">Clear</button></div>${body}</div>`;
+  } catch (e) {
+    return `<div class="roll"><div class="head">${esc(c.id)}</div><div class="nopaper">Couldn't draw this printer's paper: ${esc(e.message)}</div></div>`;
+  } }).join("");
+}
+
+// --- order composer --------------------------------------------------------------
+
+function addItem(qty = 1, name = "", notes = "", station = "") {
+  const div = document.createElement("div");
+  div.className = "item";
+  div.innerHTML = `<input type="number" min="1" value="${qty}" class="qty" aria-label="Quantity">
+    <input class="dish" placeholder="Dish" value="${esc(name)}" aria-label="Dish">
+    <button class="x small" title="Remove" aria-label="Remove item">✕</button>
+    <div class="sub"><input class="notes" placeholder="Notes" value="${esc(notes)}" aria-label="Notes">
+      <select class="station" data-want="${esc(station)}" aria-label="Station"></select></div>`;
+  div.querySelector(".station").onchange = (e) => { e.target.dataset.user = "1"; };
+  div.querySelector(".x").onclick = () => { div.remove(); };
+  $("items").appendChild(div);
+  fillStationSelects();
+}
+
+function fillStationSelects() {
+  const list = printers();
+  for (const sel of document.querySelectorAll("select.station")) {
+    const current = sel.value;
+    const opts = list.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}${p.till ? " · " + esc(p.till.name) : ""}</option>`).join("");
+    if (sel.dataset.opts === opts) continue;
+    sel.innerHTML = opts || `<option value="">(no printers yet)</option>`;
+    sel.dataset.opts = opts;
+    // Keep a station the person picked; otherwise use the one the preset
+    // asked for by name, falling back to the first printer.
+    const wanted = list.find((p) => p.name.toLowerCase() === (sel.dataset.want || "").toLowerCase());
+    if (sel.dataset.user && current && list.find((p) => p.id === current)) sel.value = current;
+    else if (wanted) sel.value = wanted.id;
+    else if (current && list.find((p) => p.id === current)) sel.value = current;
+    else if (list.length) sel.value = list[0].id;
+  }
+}
+
+function loadPreset(name) {
+  $("items").innerHTML = "";
+  for (const [q, n, notes, s] of PRESETS[name]) addItem(q, n, notes, s);
+}
+
+async function sendOrder() {
+  const order = $("order").value.trim() || "1001";
+  const byPrinter = new Map();
+  for (const row of document.querySelectorAll("#items .item")) {
+    const name = row.querySelector(".dish").value.trim();
+    const printer = row.querySelector(".station").value;
+    if (!name || !printer) continue;
+    if (!byPrinter.has(printer)) byPrinter.set(printer, []);
+    byPrinter.get(printer).push({ quantity: Math.max(1, Number(row.querySelector(".qty").value) || 1), name, notes: row.querySelector(".notes").value.trim() || undefined });
+  }
+  if (!byPrinter.size) { toast("Add at least one item with a station"); return; }
+  const restaurant = (state.devices[0] || {}).restaurant || "demo";
+  const jobs = [...byPrinter].map(([printer_id, items]) => ({
+    printer_id,
+    slip: { station: nameOf(printer_id), table: $("table").value.trim() || undefined, order_number: order, items, notes: $("note").value.trim() || undefined },
+  }));
+  try {
+    await api("/mock/jobs", { method: "POST", body: JSON.stringify({ restaurant_id: restaurant, jobs }) });
+    toast(`Order #${order} confirmed: ${jobs.length} ticket${jobs.length === 1 ? "" : "s"}`);
+    $("order").value = String((Number(order) || 1000) + 1);
+    refreshState();
+  } catch (e) { toast("Couldn't send: " + e.message); }
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+// --- events ------------------------------------------------------------------
+
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  try {
+    if (b.dataset.preset) loadPreset(b.dataset.preset);
+    else if (b.id === "add-item") addItem(1, "", "", "");
+    else if (b.id === "send") await sendOrder();
+    else if (b.id === "clear") { $("items").innerHTML = ""; addItem(); $("note").value = ""; }
+    else if (b.dataset.silence) {
+      await api(`/mock/devices/${encodeURIComponent(b.dataset.silence)}/silence`, { method: "POST", body: JSON.stringify({ on: b.dataset.on === "1" }) });
+      toast(b.dataset.on === "1" ? `Network cut for ${b.dataset.silence}. Its tickets move after ${config.not_answering} s.` : "Network restored. The agent reconnects on its next retry.");
+      refreshState();
+    } else if (b.dataset.revoke) {
+      if (!confirm("Revoke this till's credential? The agent stops and must be re-paired.")) return;
+      await api(`/mock/devices/${encodeURIComponent(b.dataset.revoke)}/revoke`, { method: "POST" });
+      refreshState();
+    } else if (b.dataset.clearpaper) {
+      await api(`/mock/printer-control/${encodeURIComponent(b.dataset.clearpaper)}/tickets`, { method: "DELETE" });
+      refreshTickets();
+    }
+  } catch (err) { toast(err.message); }
+});
+
+document.addEventListener("change", async (e) => {
+  const el = e.target;
+  try {
+    if (el.dataset.mode || el.dataset.status) {
+      const id = el.dataset.mode || el.dataset.status;
+      const body = el.dataset.mode ? { mode: el.value } : { status: el.value };
+      printerCtl[id] = await api(`/mock/printer-control/${encodeURIComponent(id)}/state`, { method: "PUT", body: JSON.stringify(body) });
+      toast(`${nameOf(id)}: ${el.options[el.selectedIndex].text}`);
+      el.blur();
+      renderPrinters(); renderRolls();
+    } else if (el.dataset.flag) {
+      const flags = [...document.querySelectorAll("#flags input:checked")].map((x) => x.dataset.flag);
+      await api("/mock/hostile", { method: "PUT", body: JSON.stringify({ flags }) });
+      toast(flags.length ? "Server mode: " + flags.join(", ") : "Server back to normal");
+      el.blur();
+      refreshState();
+    } else if (el.dataset.backup !== undefined) {
+      const backups = { ...state.backups };
+      if (el.value) backups[el.dataset.backup] = el.value; else delete backups[el.dataset.backup];
+      await api("/mock/backups", { method: "PUT", body: JSON.stringify({ backups }) });
+      toast("Backup across tills updated");
+      el.blur();
+      refreshState();
+    }
+  } catch (err) { toast(err.message); }
+});
+
+// --- start ---------------------------------------------------------------------
+
+(async function start() {
+  try { config = await api("/mock/demo-config"); } catch {}
+  loadPreset("rush");
+  await refreshState();
+  await refreshPrinterCtl();
+  await refreshTickets();
+  setInterval(refreshState, 1000);
+  setInterval(refreshTickets, 1500);
+  setInterval(refreshPrinterCtl, 4000);
+})();
+</script>
+</body>
+</html>

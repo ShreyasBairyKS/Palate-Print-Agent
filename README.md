@@ -22,6 +22,48 @@ printer. The design is in `../Palate print agent design plan.md`.
 Nothing here should talk to a real printer or a real Palate server until M4
 is signed off.
 
+## Live demo
+
+```bash
+bash scripts/demo-live.sh
+```
+
+This builds everything, starts a mock Palate server, three fake printers and
+two tills (two real agents), pairs them, and opens http://127.0.0.1:8080/.
+Ctrl-C stops it all.
+
+| Till | Printers |
+| --- | --- |
+| front-till | Tandoor (its backup on this till: Pass), Pass |
+| back-till | Wok |
+
+If the front till goes silent, the server moves its tickets to Wok.
+
+On the page you can:
+
+- **Place orders.** Use the presets (English, Kannada, Hindi, Tamil, accented)
+  or type your own. Items are split into one ticket per station.
+- **Watch each ticket's outcome live:** queued, printing, then `printed`,
+  `written`, `fallback` or `failed`, with the reason, and alerts.
+- **See the paper each printer produced,** drawn from the actual ESC/POS
+  bytes, with Indian-script lines as the printed images.
+- **Break things on purpose:**
+  - set a printer to switched off, resetting, hung, dropping or freezing
+    mid-ticket, or paper out;
+  - cut a till's network, so after 15 s its tickets move to the other till;
+  - revoke a till;
+  - turn on any hostile server mode.
+
+The demo uses short timings so failures show quickly: a 10 s hold, a 20 s
+lease, and a till counts as not answering after 15 s. A till whose network
+comes back reconnects on its next retry, within 30 s.
+
+To print Tandoor's tickets on a **real network printer**:
+
+```bash
+REAL_PRINTER=192.168.1.50 bash scripts/demo-live.sh
+```
+
 ## Layout
 
 | Path | Track | What it is |
@@ -42,13 +84,15 @@ is signed off.
 | `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
 | `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `version` |
-| `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder, fake printer, mock server |
+| `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder and ticket preview, fake printer with a control API, mock server |
+| `internal/mockserver/demo/` | rig | The live demo page, served by the mock server |
 | `cmd/escpos-dump/`, `cmd/fakeprinter/`, `cmd/mockpalate/` | rig | Command-line wrappers |
 | `arch_test.go` | seam | `render`, `job`, `ledger`, `internal/dpapi` may not import `net`; `queue`, `printer/*`, `config` may not import `net/http` |
 | `e2e_test.go` | | The real agent against the mock server and fake printers |
 | `crash_test.go` | | Builds `palate-agent`, kills it mid-write, restarts it |
 | `m3_test.go` | | Hostile flags, a hanging printer to its backup, a silent till's jobs on another till |
-| `scripts/demo.sh` | | Demo: pair, test print, run, an order with a Kannada dish prints |
+| `scripts/demo-live.sh` | | **Live demo in the browser**: two tills, three printers, break things on purpose |
+| `scripts/demo.sh` | | Scripted demo: pair, test print, run, an order with a Kannada dish prints |
 | `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
 
 ## Build and test
@@ -262,8 +306,17 @@ with `-dump`, decodes each connection as it closes.
 | `stall` | Accepts, never reads; the writer blocks once buffers fill |
 | `midstream` | Reads `-after` bytes, then goes silent with the connection open |
 | `drop` | Reads `-after` bytes, then resets (partial write) |
+| `off` | Stops listening, like a switched-off printer: connections are refused |
 
-`-status ok|paper-out|none` sets the `DLE EOT` answers.
+`-status ok|paper-out|none` sets the `DLE EOT` answers. `-name Tandoor -control
+127.0.0.1:19190` adds a small control API on loopback, used by the demo page:
+
+| Call | What it does |
+| --- | --- |
+| `GET /state` | Shows the name, address, mode and status |
+| `PUT /state` | Changes `{"mode", "status", "stop_after"}` while the printer runs |
+| `GET /tickets` | Lists the last 30 tickets, with a preview of the printed lines |
+| `DELETE /tickets` | Clears them |
 
 A *connect* timeout can't be faked on loopback, because the OS completes the
 handshake. `printer/net` tests inject a dialer that never answers instead.
@@ -283,6 +336,9 @@ prints a plain hexdump.
 ```bash
 bin/mockpalate -seed demo
 ```
+
+`-printer-control p-tandoor=http://127.0.0.1:19190,...` connects the demo
+page (at `/`) to fake printers' control APIs. Loopback addresses only.
 
 Serves on `127.0.0.1:8080` with a 25 s hold and a 60 s lease, and prints a
 pairing code for restaurant `demo`. `-not-answering` and `-max-deliveries`
@@ -327,6 +383,9 @@ What the mock already enforces:
 | `PUT /mock/hostile` | `{"flags":["repeat-id"]}`; an empty list clears them |
 | `POST /mock/devices/{id}/revoke` | none |
 | `POST /mock/devices/{id}/rotate` | none |
+| `POST /mock/devices/{id}/silence` | `{"on": true}`: the till's requests fail as if its network were down, including a poll already held |
+| `GET /mock/demo-config` | Lists the printers the page can control, plus the server's timings |
+| `GET`, `PUT`, `DELETE /mock/printer-control/{id}/state` or `/tickets` | Passes the request through to that fake printer's control API |
 | `PUT /mock/backups` | `{"backups":{"p-tandoor":"p-wok"}}`: printer to backup printer, across tills |
 
 **Hostile flags** (`-hostile a,b`, or `PUT /mock/hostile`). Each ends in the
