@@ -114,8 +114,29 @@ func TestSilentTillsJobsMoveToBackup(t *testing.T) {
 	_ = devB
 }
 
-func TestSilentTillWithoutBackupIsRecordedFailure(t *testing.T) {
+func TestSilentTillWithoutBackupWaitsThenPrints(t *testing.T) {
 	h, credA, _, _, _ := twoTills(t, Config{Hold: 50 * time.Millisecond, NotAnswering: 200 * time.Millisecond})
+	h.poll(credA)
+	id := h.srv.NewJob("r1", "p1", slip())
+	waitFor(t, "a waiting alert", func() bool {
+		for _, a := range h.srv.Snapshot().Alerts {
+			if strings.Contains(a, id) && strings.Contains(a, "waiting for the till") {
+				return true
+			}
+		}
+		return false
+	})
+	if j := jobOf(h, id); j.State != "queued" {
+		t.Fatalf("job = %+v; a short outage must not fail it", j)
+	}
+	// The till comes back and gets the job.
+	if pr, _ := h.poll(credA); len(pr.Jobs) != 1 || pr.Jobs[0].ID != id {
+		t.Fatalf("returning till got %+v; want the waiting job", pr.Jobs)
+	}
+}
+
+func TestSilentTillWithoutBackupFailsAfterWaitLimit(t *testing.T) {
+	h, credA, _, _, _ := twoTills(t, Config{Hold: 50 * time.Millisecond, NotAnswering: 200 * time.Millisecond, WaitForTill: 300 * time.Millisecond})
 	h.poll(credA)
 	id := h.srv.NewJob("r1", "p1", slip())
 	waitFor(t, "the server to record a failure", func() bool { return jobOf(h, id).State == "done" })

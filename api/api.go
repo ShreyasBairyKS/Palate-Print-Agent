@@ -67,6 +67,12 @@ type PrinterHealth struct {
 
 // PollResponse is returned as soon as a job exists, or with no jobs once the
 // server's hold time passes.
+//
+// Compatibility: the agent ignores fields it doesn't know, at every level, so
+// the server can add fields without breaking agents already installed. The
+// exceptions are fields that try to steer printing (see source/cloud's
+// forbidden list): a job carrying one is refused. Information that must
+// reach the paper goes in Slip.Extras.
 type PollResponse struct {
 	Jobs         []Job `json:"jobs"`
 	LeaseSeconds int   `json:"lease_seconds"`
@@ -91,6 +97,20 @@ type Slip struct {
 	Notes       string    `json:"notes,omitempty"`
 	Duplicate   bool      `json:"duplicate,omitempty"`
 	MovedFrom   string    `json:"moved_from,omitempty"`
+	// Extras are labelled lines printed under the order line, such as
+	// {"label": "Course", "value": "2"}. New information the server wants on
+	// the ticket goes here, so agents already in restaurants print it without
+	// an update. The agent prints at most MaxExtras.
+	Extras []Extra `json:"extras,omitempty"`
+}
+
+// MaxExtras is the most extra lines the agent prints on one ticket.
+const MaxExtras = 10
+
+// Extra is one labelled line on the ticket.
+type Extra struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 type Item struct {

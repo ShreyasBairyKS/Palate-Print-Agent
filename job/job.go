@@ -45,6 +45,7 @@ type Slip struct {
 	PlacedAt    time.Time // original order time, always printed
 	Items       []Item
 	Notes       string // order-level note, e.g. "allergy: peanuts"
+	Extras      []Extra
 
 	// Banners. Decided by the wire track; Render only draws them.
 	Duplicate       bool   // every reprint is marked DUPLICATE
@@ -52,6 +53,12 @@ type Slip struct {
 	MovedFrom       string // printer the server moved this job from (its till stopped answering)
 	FallbackFrom    string // printer on this till that was down, so this prints on its backup
 	Delayed         bool   // job older than the configured age
+}
+
+// Extra is a labelled line printed under the order line ("Course: 2").
+type Extra struct {
+	Label string
+	Value string
 }
 
 // Item is one line on the ticket.

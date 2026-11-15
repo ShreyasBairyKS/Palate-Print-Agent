@@ -176,12 +176,29 @@ func (q *Queue) Start(ctx context.Context) {
 func (q *Queue) Wait() { q.wg.Wait() }
 
 // Submit queues a job on its printer. It never blocks. A job already queued
-// or printing (delivered again after its lease expired) is ignored. A job
-// for a printer this till doesn't own is reported as failed straight away.
+// or printing (delivered again after its lease expired) is ignored, unless
+// it has finished and only its report is outstanding: then the stored
+// outcome is reported again at once. A job for a printer this till doesn't
+// own is reported as failed straight away.
 func (q *Queue) Submit(ctx context.Context, j job.Job) {
 	q.mu.Lock()
 	if q.pending[j.ID] {
 		q.mu.Unlock()
+		if prior, seen := q.cfg.Ledger.Get(j.ID); seen && prior.State == ledger.Done {
+			// On paper already; the first report is still being retried,
+			// perhaps stuck on a connection that died with the internet.
+			// Answer this delivery so the server doesn't give up on it.
+			q.wg.Add(1)
+			go func() {
+				defer q.wg.Done()
+				if err := q.reporter.Report(ctx, j.ID, prior.Outcome); err != nil {
+					q.cfg.Log.Warn("re-reporting a finished job failed; it will come back", "job", j.ID, "err", err)
+					return
+				}
+				q.cfg.Log.Info("job delivered again while its report was pending; reported the stored outcome", "job", j.ID, "outcome", prior.Outcome.Kind)
+			}()
+			return
+		}
 		q.cfg.Log.Info("job already queued; ignoring the repeat", "job", j.ID)
 		return
 	}
@@ -264,8 +281,15 @@ func (q *Queue) run(ctx context.Context, w *worker) {
 		w.mu.Unlock()
 		switch next {
 		case stepReport:
-			q.report(ctx, t.j.ID, o)
-			q.done(t.j.ID)
+			// Reporting runs on its own, so the next ticket never waits on
+			// the network: during an outage a report can take a while to
+			// fail, and the outcome is already safe in the ledger.
+			q.wg.Add(1)
+			go func(id string, o job.Outcome) {
+				defer q.wg.Done()
+				q.report(ctx, id, o)
+				q.done(id)
+			}(t.j.ID, o)
 		case stepStopping:
 			q.done(t.j.ID)
 		case stepHandedOff:

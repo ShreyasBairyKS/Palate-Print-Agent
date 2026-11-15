@@ -110,6 +110,17 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 	}
 	r.spread(table, "#"+slip.OrderNumber)
 	r.text(slip.PlacedAt.Format("02 Jan 2006 15:04"))
+	// Extras: labelled lines the server added ("Course: 2"), in bold so a new
+	// piece of information isn't missed.
+	for _, e := range slip.Extras {
+		line := extraLine(e)
+		if line == "" {
+			continue
+		}
+		b.Write(cmdBoldOn)
+		r.block(line, cols, 2, "", "", style{bold: true})
+		b.Write(cmdBoldOff)
+	}
 	r.text(strings.Repeat("-", cols))
 
 	for _, it := range slip.Items {
@@ -216,11 +227,27 @@ func (r *renderer) text(line string) {
 }
 
 // checkSlip rejects slips that can't be printed, naming the field.
+// extraLine is how one extra reads on paper: "Label: Value", or whichever
+// half is set.
+func extraLine(e job.Extra) string {
+	l, v := strings.TrimSpace(e.Label), strings.TrimSpace(e.Value)
+	switch {
+	case l != "" && v != "":
+		return l + ": " + v
+	case l != "":
+		return l
+	}
+	return v
+}
+
 func checkSlip(s job.Slip) error {
 	fields := []struct{ name, text string }{
 		{"station", s.Station}, {"table", s.Table}, {"order_number", s.OrderNumber},
 		{"notes", s.Notes}, {"duplicate_reason", s.DuplicateReason}, {"moved_from", s.MovedFrom},
 		{"fallback_from", s.FallbackFrom},
+	}
+	for i, e := range s.Extras {
+		fields = append(fields, struct{ name, text string }{fmt.Sprintf("extras[%d]", i), extraLine(e)})
 	}
 	for i, it := range s.Items {
 		fields = append(fields,

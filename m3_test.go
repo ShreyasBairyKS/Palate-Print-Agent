@@ -69,6 +69,7 @@ func TestM3EveryHostileFlagEndsInARecordedOutcome(t *testing.T) {
 		{mockserver.DropMidway, "failed", "server", "delivered", 0, false},
 		{mockserver.ShortLease, "written", "agent", "", 1, true},
 		{mockserver.RepeatID, "printed", "agent", "", 1, false},
+		{mockserver.NewerServer, "printed", "agent", "", 1, false},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.flag), func(t *testing.T) {

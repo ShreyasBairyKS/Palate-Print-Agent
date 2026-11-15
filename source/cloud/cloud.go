@@ -50,12 +50,15 @@ type Client struct {
 	HTTP   *http.Client // nil means a default client (no overall timeout; each call has its own)
 	Health func() api.Health
 	Log    *slog.Logger
-	// Hold is the longest the server holds a poll. Fetch waits Hold+15s
+	// Hold is the longest the server holds a poll. Fetch waits Hold+Grace
 	// before giving up on a response. Default 25s.
 	Hold time.Duration
+	// Grace is how long past Hold a poll may take. Default 15s.
+	Grace time.Duration
 
-	mu   sync.Mutex
-	cred string
+	mu          sync.Mutex
+	cred        string
+	seenUnknown map[string]bool // unknown job fields already logged
 }
 
 func (c *Client) client() *http.Client {
@@ -153,15 +156,21 @@ type wirePoll struct {
 // Fetch long-polls for jobs. It returns as soon as the server has any, or
 // with none when the server's hold time passes.
 //
-// Jobs that break the rules (an address, raw printer bytes, any unknown
-// field, a printer id that is an address) are never returned: Fetch reports
-// them as failed itself, so the floor sees the failure.
+// Fields the agent doesn't know are ignored, so the server can add fields
+// without breaking installed agents. Jobs that break the rules (a field from
+// the forbidden list such as a printer address or raw printer bytes, or a
+// printer id that is an address) are never returned: Fetch reports them as
+// failed itself, so the floor sees the failure.
 func (c *Client) Fetch(ctx context.Context) ([]job.Job, error) {
 	hold := c.Hold
 	if hold == 0 {
 		hold = 25 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, hold+15*time.Second)
+	grace := c.Grace
+	if grace == 0 {
+		grace = 15 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, hold+grace)
 	defer cancel()
 
 	var health api.Health
@@ -172,10 +181,10 @@ func (c *Client) Fetch(ctx context.Context) ([]job.Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Unknown top-level fields are ignored: a field added to the response
+	// later must not stop agents already installed from polling.
 	var wp wirePoll
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&wp); err != nil {
+	if err := json.Unmarshal(data, &wp); err != nil {
 		return nil, fmt.Errorf("cloud: bad poll response: %w", err)
 	}
 
@@ -186,11 +195,12 @@ func (c *Client) Fetch(ctx context.Context) ([]job.Job, error) {
 	var jobs []job.Job
 	seen := map[string]bool{}
 	for _, raw := range wp.Jobs {
-		j, err := parseJob(raw)
+		j, unknown, err := parseJob(raw)
 		if err != nil {
 			c.reject(ctx, raw, err)
 			continue
 		}
+		c.noteUnknown(unknown)
 		if seen[j.ID] {
 			continue // the same job twice in one response prints once
 		}
@@ -217,21 +227,124 @@ func (c *Client) rotate(newCred string) {
 	c.log().Info("credential rotated")
 }
 
-// parseJob decodes one job strictly and checks the rules.
-func parseJob(raw json.RawMessage) (job.Job, error) {
+// parseJob decodes one job and checks the rules. Fields the agent doesn't
+// know are ignored and returned (as paths like "slip.course_number") so they
+// can be logged; a field from the forbidden list, at any depth, refuses the
+// whole job.
+func parseJob(raw json.RawMessage) (job.Job, []string, error) {
+	unknown, err := inspect(raw, "", jobShape)
+	if err != nil {
+		return job.Job{}, nil, fmt.Errorf("rejected: %w", err)
+	}
 	var aj api.Job
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&aj); err != nil {
-		return job.Job{}, fmt.Errorf("rejected: %w", err)
+	if err := json.Unmarshal(raw, &aj); err != nil {
+		return job.Job{}, nil, fmt.Errorf("rejected: %w", err)
 	}
 	if aj.ID == "" || aj.PrinterID == "" {
-		return job.Job{}, errors.New("rejected: job without id or printer_id")
+		return job.Job{}, nil, errors.New("rejected: job without id or printer_id")
 	}
 	if looksLikeAddress(aj.PrinterID) {
-		return job.Job{}, fmt.Errorf("rejected: printer_id %q is an address; jobs name printers by id", aj.PrinterID)
+		return job.Job{}, nil, fmt.Errorf("rejected: printer_id %q is an address; jobs name printers by id", aj.PrinterID)
 	}
-	return toJob(aj), nil
+	return toJob(aj), unknown, nil
+}
+
+// forbidden are field names that try to steer printing: where to send the
+// ticket, or bytes to send instead of the slip. The agent never acts on
+// them, but a server sending one is broken or compromised, so the job is
+// refused and the refusal reported. Matched case-insensitively at any depth.
+var forbidden = map[string]bool{
+	"printer_address": true, "printer_ip": true, "printer_host": true, "printer_port": true,
+	"ip": true, "ip_address": true, "host": true, "hostname": true, "port": true,
+	"raw": true, "raw_bytes": true, "escpos": true, "esc_pos": true, "printer_commands": true,
+}
+
+// shape lists the fields the agent knows at one level of a job, and the
+// shape of each one's contents (nil for a plain value).
+type shape map[string]shape
+
+var (
+	itemShape  = shape{"quantity": nil, "name": nil, "notes": nil}
+	extraShape = shape{"label": nil, "value": nil}
+	slipShape  = shape{
+		"station": nil, "table": nil, "order_number": nil, "placed_at": nil, "notes": nil,
+		"duplicate": nil, "moved_from": nil, "items": itemShape, "extras": extraShape,
+	}
+	jobShape = shape{"id": nil, "printer_id": nil, "created_at": nil, "slip": slipShape}
+)
+
+// inspect walks a JSON value. It returns the paths of fields not in known
+// (known nil means every field is unknown) and fails on a forbidden field.
+// Arrays are walked element by element with the same shape.
+func inspect(raw json.RawMessage, path string, known shape) ([]string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	switch raw[0] {
+	case '[':
+		var elems []json.RawMessage
+		if err := json.Unmarshal(raw, &elems); err != nil {
+			return nil, err
+		}
+		var unknown []string
+		for _, e := range elems {
+			u, err := inspect(e, path, known)
+			if err != nil {
+				return nil, err
+			}
+			unknown = append(unknown, u...)
+		}
+		return unknown, nil
+	case '{':
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return nil, err
+		}
+		var unknown []string
+		for name, v := range fields {
+			p := name
+			if path != "" {
+				p = path + "." + name
+			}
+			if forbidden[strings.ToLower(name)] {
+				return nil, fmt.Errorf("field %q tries to steer printing; jobs carry slip contents only", p)
+			}
+			sub, ok := known[strings.ToLower(name)]
+			if !ok {
+				unknown = append(unknown, p)
+			}
+			// Unknown fields are walked too, for forbidden names inside them.
+			u, err := inspect(v, p, sub)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				unknown = append(unknown, u...)
+			}
+		}
+		return unknown, nil
+	}
+	return nil, nil
+}
+
+// noteUnknown logs each unknown field once per run, so an agent that is out
+// of date says so without flooding the log.
+func (c *Client) noteUnknown(paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seenUnknown == nil {
+		c.seenUnknown = map[string]bool{}
+	}
+	for _, p := range paths {
+		if !c.seenUnknown[p] {
+			c.seenUnknown[p] = true
+			c.log().Info("ignoring a job field this agent version doesn't know; the ticket prints without it", "field", p)
+		}
+	}
 }
 
 func looksLikeAddress(s string) bool {
@@ -267,6 +380,13 @@ func toJob(a api.Job) job.Job {
 	for i, it := range a.Slip.Items {
 		items[i] = job.Item{Quantity: it.Quantity, Name: it.Name, Notes: it.Notes}
 	}
+	var extras []job.Extra
+	for i, e := range a.Slip.Extras {
+		if i == api.MaxExtras {
+			break
+		}
+		extras = append(extras, job.Extra{Label: e.Label, Value: e.Value})
+	}
 	return job.Job{
 		ID:        a.ID,
 		PrinterID: a.PrinterID,
@@ -278,6 +398,7 @@ func toJob(a api.Job) job.Job {
 			PlacedAt:    a.Slip.PlacedAt,
 			Items:       items,
 			Notes:       a.Slip.Notes,
+			Extras:      extras,
 			Duplicate:   a.Slip.Duplicate,
 			MovedFrom:   a.Slip.MovedFrom,
 		},

@@ -44,9 +44,13 @@ const (
 	ShortLease Flag = "short-lease"
 	// RepeatID sends every job twice in the same poll response.
 	RepeatID Flag = "repeat-id"
+	// NewerServer adds fields this agent version has never heard of, at
+	// every level of the poll response, as a newer server would. Not
+	// hostile: the agent must ignore them and print normally.
+	NewerServer Flag = "newer-server"
 )
 
-var Flags = []Flag{IPInJob, RawBytes, HugePayload, DropMidway, ShortLease, RepeatID}
+var Flags = []Flag{IPInJob, RawBytes, HugePayload, DropMidway, ShortLease, RepeatID, NewerServer}
 
 func ParseFlags(s string) ([]Flag, error) {
 	var out []Flag
@@ -71,6 +75,11 @@ type Config struct {
 	// NotAnswering is how long without a poll before a till counts as not
 	// answering and its jobs move to backups. Default 2 x Hold + 10 s.
 	NotAnswering time.Duration
+	// WaitForTill is how long a job may wait for a till that isn't
+	// answering when its printer has no backup on an answering till. The
+	// job prints when the till comes back (with a DELAYED banner if old);
+	// past this age it is recorded as failed. Default 30 min.
+	WaitForTill time.Duration
 	// MaxDeliveries is how many times a job is leased without an outcome
 	// before the server records it as failed (a poison job). Default 5.
 	MaxDeliveries int
@@ -116,6 +125,9 @@ type serverJob struct {
 	MovedFrom     string              // original printer id
 	MovedFromTill string              // original device id
 	LateOutcome   *api.OutcomeRequest // the original till reported after the move
+	// Waiting is set once the job has been flagged as waiting for a till
+	// that isn't answering (no backup to move it to).
+	Waiting bool
 }
 
 type pairingCode struct {
@@ -159,6 +171,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.MaxDeliveries == 0 {
 		cfg.MaxDeliveries = 5
+	}
+	if cfg.WaitForTill == 0 {
+		cfg.WaitForTill = 30 * time.Minute
 	}
 	s := &Server{
 		cfg:       cfg,
@@ -297,7 +312,9 @@ func (s *Server) expireLeases() {
 // moveFromSilentTillsLocked applies the till-not-answering rule: a till with
 // no poll for NotAnswering has its queued jobs moved to their printers'
 // backups on a till that is answering. A job whose lease is still live is
-// never moved. With no reachable backup the job is a recorded failure.
+// never moved. With no reachable backup the job waits for its own till, with
+// an alert, so a short outage loses nothing; only past WaitForTill is it a
+// recorded failure.
 func (s *Server) moveFromSilentTillsLocked(now time.Time) bool {
 	answering := func(d *device) bool {
 		return d != nil && !d.Revoked && !d.LastPoll.IsZero() && now.Sub(d.LastPoll) < s.cfg.NotAnswering
@@ -326,18 +343,25 @@ func (s *Server) moveFromSilentTillsLocked(now time.Time) bool {
 		if d == nil || d.LastPoll.IsZero() || answering(d) {
 			continue // owned by a till that is answering, or that never polled yet
 		}
-		changed = true
 		from := j.Job.PrinterID
 		backup := s.backups[from]
 		bd := owner[backup]
 		if backup == "" || !answering(bd) {
-			j.State = done
-			j.RecordedBy = "server"
-			j.Outcome = &api.OutcomeRequest{Kind: "failed",
-				Reason: fmt.Sprintf("server: till %s not answering and printer %s has no backup on an answering till", d.ID, from)}
-			s.alerts = append(s.alerts, fmt.Sprintf("%s: %s", id, j.Outcome.Reason))
+			if now.Sub(j.Job.CreatedAt) > s.cfg.WaitForTill {
+				changed = true
+				j.State = done
+				j.RecordedBy = "server"
+				j.Outcome = &api.OutcomeRequest{Kind: "failed",
+					Reason: fmt.Sprintf("server: till %s not answering for over %s and printer %s has no backup on an answering till", d.ID, s.cfg.WaitForTill, from)}
+				s.alerts = append(s.alerts, fmt.Sprintf("%s: %s", id, j.Outcome.Reason))
+			} else if !j.Waiting {
+				changed = true
+				j.Waiting = true
+				s.alerts = append(s.alerts, fmt.Sprintf("%s: till %s not answering and printer %s has no backup on an answering till; waiting for the till to come back", id, d.ID, from))
+			}
 			continue
 		}
+		changed = true
 		j.MovedFrom = from
 		j.MovedFromTill = d.ID
 		j.Job.PrinterID = backup
@@ -507,6 +531,45 @@ func (s *Server) copyHostileLocked() map[Flag]bool {
 	return c
 }
 
+// addFutureFields adds fields a later server version might send, at the top
+// level and in every job, slip and item.
+func addFutureFields(body []byte) []byte {
+	var poll map[string]any
+	if json.Unmarshal(body, &poll) != nil {
+		return body
+	}
+	poll["server_time"] = time.Now().UTC()
+	poll["api_version"] = "2027-03"
+	jobs, _ := poll["jobs"].([]any)
+	for _, j := range jobs {
+		jm, ok := j.(map[string]any)
+		if !ok {
+			continue
+		}
+		jm["priority"] = "high"
+		jm["channel"] = map[string]any{"kind": "captain-app", "device": "phone-7"}
+		slip, ok := jm["slip"].(map[string]any)
+		if !ok {
+			continue
+		}
+		slip["course_number"] = 2
+		slip["guest_count"] = 4
+		slip["loyalty"] = map[string]any{"tier": "gold"}
+		items, _ := slip["items"].([]any)
+		for _, it := range items {
+			if im, ok := it.(map[string]any); ok {
+				im["allergens"] = []string{"nuts"}
+				im["modifiers"] = []map[string]any{{"name": "extra cheese", "price": 40}}
+			}
+		}
+	}
+	out, err := json.Marshal(poll)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 // wireJob is api.Job plus the fields only a hostile server would send.
 type wireJob struct {
 	api.Job
@@ -543,6 +606,9 @@ func (s *Server) writePoll(w http.ResponseWriter, jobs []api.Job, lease time.Dur
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		return
+	}
+	if hostile[NewerServer] {
+		body = addFutureFields(body)
 	}
 
 	if hostile[DropMidway] {

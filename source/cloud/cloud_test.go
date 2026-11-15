@@ -114,7 +114,7 @@ func TestHostileJobsAreRefusedAndReported(t *testing.T) {
 func TestPrinterIDThatIsAnAddressIsRefused(t *testing.T) {
 	// The mock only sends jobs for registered printer ids, so check parseJob
 	// directly.
-	_, err := parseJob([]byte(`{"id":"j1","printer_id":"192.168.1.50:9100","created_at":"2026-11-11T00:00:00Z","slip":{}}`))
+	_, _, err := parseJob([]byte(`{"id":"j1","printer_id":"192.168.1.50:9100","created_at":"2026-11-11T00:00:00Z","slip":{}}`))
 	if err == nil {
 		t.Fatal("a printer id that is an address was accepted")
 	}

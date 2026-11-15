@@ -96,6 +96,16 @@ var goldenCases = map[string]func() job.Slip{
 		s.DuplicateReason = "partial ticket on TANDOOR"
 		return s
 	},
+	"extras": func() job.Slip {
+		s := baseSlip()
+		s.Extras = []job.Extra{
+			{Label: "Course", Value: "2"},
+			{Label: "Guests", Value: "4"},
+			{Label: "Server", Value: "ಅನಿತಾ"},
+			{Label: "Allergy", Value: "peanuts and tree nuts, check every garnish before it goes out"},
+		}
+		return s
+	},
 	"latin-accents": func() job.Slip {
 		s := baseSlip()
 		s.Station = "Pâtisserie"

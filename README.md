@@ -13,6 +13,13 @@ printer, the moment an order is confirmed.
   a full write stall (`queue.TestHangingPrinterReachesBackupWithin15s`).
 - **Silent till:** when a till stops answering, its jobs print on another
   till with a MOVED FROM banner (`TestM3SilentTillsJobsPrintOnAnotherTill`).
+- **Internet outages:** the line goes quiet twice and comes back; the agent
+  reconnects on its own, prints everything ordered meanwhile and nothing
+  twice (`TestInternetGoesQuietTwiceAndComesBack`; set
+  `PALATE_REALTIME_OUTAGE=1` for two real 90-second outages).
+- **Newer server:** fields this agent version has never seen are ignored and
+  the ticket prints (`TestNewerServerFieldsAreIgnored`, and the
+  `newer-server` mock flag).
 - **Crashes (M2):** killing the agent process mid-write never loses a ticket or
   prints one twice unmarked (`TestM2KillMidWrite`).
 - **Indian scripts:** a Kannada slip renders identically every time,
@@ -56,7 +63,7 @@ On the page you can:
 
 The demo uses short timings so failures show quickly: a 10 s hold, a 20 s
 lease, and a till counts as not answering after 15 s. A till whose network
-comes back reconnects on its next retry, within 30 s.
+comes back reconnects on its next retry, within about 12 s.
 
 To print Tandoor's tickets on a **real network printer**:
 
@@ -91,6 +98,7 @@ REAL_PRINTER=192.168.1.50 bash scripts/demo-live.sh
 | `e2e_test.go` | | The real agent against the mock server and fake printers |
 | `crash_test.go` | | Builds `palate-agent`, kills it mid-write, restarts it |
 | `m3_test.go` | | Hostile flags, a hanging printer to its backup, a silent till's jobs on another till |
+| `outage_test.go` | | The internet goes quiet twice and comes back |
 | `scripts/demo-live.sh` | | **Live demo in the browser**: two tills, three printers, break things on purpose |
 | `scripts/demo.sh` | | Scripted demo: pair, test print, run, an order with a Kannada dish prints |
 | `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
@@ -198,10 +206,15 @@ Config rules:
 ### What happens to a ticket
 
 1. The long poll returns the moment the server queues a job.
-2. Jobs carrying an address, raw printer bytes, any unknown field, or a
-   printer id that is an address are refused and reported `failed`. They never
-   reach a printer. A job repeated in one response, or delivered again while
-   it is still queued, prints once.
+2. Fields the agent doesn't know are ignored, at every level, so a newer
+   server can add fields without breaking agents already installed; each is
+   logged once. Information the server wants printed goes in `slip.extras`
+   (labelled lines such as "Course: 2", up to 10), which this version already
+   prints. Jobs carrying a field that tries to steer printing (a printer
+   address, host, port or raw printer bytes, at any depth), or a printer id
+   that is an address, are refused and reported `failed`. They never reach a
+   printer. A job repeated in one response, or delivered again while it is
+   still queued, prints once.
 3. The ledger is checked:
 
    | Ledger says | What happens |
@@ -241,12 +254,21 @@ Config rules:
      probe or write brings it back. A down printer with no backup is still
      tried, because it may have recovered.
 8. The ledger records Done with the outcome and flushes. Only then is the
-   outcome reported, with retries. If the report is lost, the lease expires,
-   the job comes back, and step 3 reports the stored outcome without
-   printing.
+   outcome reported, with retries, in the background: the printer's next
+   ticket never waits on the network. If the report is lost, the lease
+   expires, the job comes back, and step 3 reports the stored outcome without
+   printing. If it comes back while the first report is still being retried,
+   the stored outcome is reported again at once.
 
 ### When something gets stuck
 
+- **The internet drops:** failed attempts are retried after 1, 2, 4, 8, then
+  every 10 s (±20% jitter), so the agent is back within about 12 s of the
+  line returning. A connection attempt gives up after 10 s, and TCP
+  keepalives notice within about 20 s that a held poll's connection has
+  died. Jobs ordered meanwhile wait on the server and print on reconnection;
+  a till quiet for over 60 s has its jobs moved to backups on another till,
+  if there is one (below).
 - **The poll loop:** the watchdog abandons a poll that outlives 55 s (the
   hold time plus 30 s) and starts a fresh one. The restart count rides in
   the health payload as `watchdog_restarts`.
@@ -256,7 +278,10 @@ Config rules:
   - Its queued jobs move to their printers' backups on an answering till,
     and print there with "MOVED FROM TANDOOR / check for duplicate".
   - A job whose lease is still live is never moved.
-  - With no reachable backup, the server records the job as failed.
+  - With no reachable backup, the job waits for its own till, with an alert,
+    and prints when the till comes back (DELAYED if over 10 minutes old). So
+    a short outage at a one-till restaurant loses nothing. Only a job still
+    waiting after 30 minutes is recorded as failed.
   - If the original till reports the job later, the server keeps both
     outcomes and raises a duplicate alert.
 - **A job the agent can't accept:** this is a poison job, such as an
@@ -399,6 +424,7 @@ recorded outcome shown (`TestM3EveryHostileFlagEndsInARecordedOutcome`).
 | `drop-midway` | Sends half the response, then closes | Backs off and retries | `failed`, by the server after 5 deliveries |
 | `short-lease` | Leases for 2 s, shorter than a slow print | Ignores the redelivery while printing; the ledger stops any reprint | `written`, one copy on paper |
 | `repeat-id` | Sends each job twice in one response | Prints it once | `printed`, one copy on paper |
+| `newer-server` | Adds fields this agent has never seen, at every level | Ignores them | `printed`, one copy on paper |
 
 ## Provisional: what changes when the backend API is specified
 

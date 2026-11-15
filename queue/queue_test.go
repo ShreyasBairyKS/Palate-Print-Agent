@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -387,5 +388,76 @@ func TestStopMidWriteLeavesAttempting(t *testing.T) {
 	case r := <-rec.ch:
 		t.Fatalf("reported %+v while stopping; the job should come back after its lease", r)
 	default:
+	}
+}
+
+// stuckReporter blocks every report until released, like a report sent into
+// a connection that has silently died.
+type stuckReporter struct{ release chan struct{} }
+
+func (r stuckReporter) Report(ctx context.Context, _ string, _ job.Outcome) error {
+	select {
+	case <-r.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestStuckReportDoesNotDelayTheNextTicket(t *testing.T) {
+	w := &scriptWriter{confirm: true}
+	rep := stuckReporter{release: make(chan struct{})}
+	defer close(rep.release)
+	q := start(t, []Printer{{ID: "p1", Name: "Tandoor", Width: job.Width80, Writer: w}}, rep, Config{})
+	q.Submit(context.Background(), testJob("j1", "p1"))
+	q.Submit(context.Background(), testJob("j2", "p1"))
+	q.Submit(context.Background(), testJob("j3", "p1"))
+	deadline := time.Now().Add(2 * time.Second)
+	for w.n() < 3 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n := w.n(); n != 3 {
+		t.Fatalf("%d of 3 tickets printed while the first report was stuck; printing must not wait on reporting", n)
+	}
+}
+
+// firstStuckReporter blocks the first report until released and records the
+// rest.
+type firstStuckReporter struct {
+	release chan struct{}
+	calls   atomic.Int32
+	rec     *recorder
+}
+
+func (r *firstStuckReporter) Report(ctx context.Context, id string, o job.Outcome) error {
+	if r.calls.Add(1) == 1 {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return r.rec.Report(ctx, id, o)
+}
+
+func TestRedeliveryWhileReportStuckIsAnswered(t *testing.T) {
+	w := &scriptWriter{confirm: true}
+	rep := &firstStuckReporter{release: make(chan struct{}), rec: newRecorder()}
+	defer close(rep.release)
+	q := start(t, []Printer{{ID: "p1", Name: "Tandoor", Width: job.Width80, Writer: w}}, rep, Config{})
+	j := testJob("j1", "p1")
+	q.Submit(context.Background(), j)
+	deadline := time.Now().Add(2 * time.Second)
+	for rep.calls.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	// The lease expires and the server sends the job again.
+	q.Submit(context.Background(), j)
+	r := rep.rec.next(t)
+	if r.id != "j1" || r.o.Kind != job.Printed {
+		t.Fatalf("got %+v, want j1 printed", r)
+	}
+	if n := w.n(); n != 1 {
+		t.Fatalf("printed %d times, want 1", n)
 	}
 }

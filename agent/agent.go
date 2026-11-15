@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -27,7 +29,7 @@ import (
 )
 
 // Version is reported in every poll's health payload.
-const Version = "0.3.0-m3"
+const Version = "0.3.1-m3"
 
 // Source is where the agent gets jobs: the cloud client, or a fake in tests.
 type Source interface {
@@ -46,6 +48,10 @@ type Agent struct {
 	// this only fires on a bug or a call that ignores cancellation.
 	// Default 25 s hold + 30 s.
 	Watchdog time.Duration
+	// RetryMax caps the wait between attempts while the server can't be
+	// reached, so the agent is back within seconds of the internet
+	// returning. Default 10 s; waits start at 1 s and carry ±20% jitter.
+	RetryMax time.Duration
 
 	printers []api.Printer
 
@@ -70,7 +76,7 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Writer: WriterFor(p, cfg.Timings), Backup: p.Backup})
 		a.printers = append(a.printers, api.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Width: p.Width})
 	}
-	cl := &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log}
+	cl := &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log, HTTP: newHTTPClient()}
 	a.Cloud = cl
 	a.Queue = queue.New(qps, cl, queue.Config{
 		Ledger:       led,
@@ -81,6 +87,29 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 		Log:          log,
 	})
 	return a, nil
+}
+
+// newHTTPClient is the client for Palate's server, tuned for a restaurant
+// line that drops out: a connection attempt gives up after 10 s, and TCP
+// keepalives (every 5 s once idle, 3 misses) notice within about 20 s that a
+// held poll's connection has died, instead of waiting for the poll's own
+// timeout. A server legitimately holding a poll still answers keepalives.
+func newHTTPClient() *http.Client {
+	d := &net.Dialer{
+		Timeout: 10 * time.Second,
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable: true, Idle: 5 * time.Second, Interval: 5 * time.Second, Count: 3,
+		},
+	}
+	return &http.Client{Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           d.DialContext,
+		ForceAttemptHTTP2:     true,
+		TLSHandshakeTimeout:   10 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		MaxIdleConns:          4,
+	}}
 }
 
 // Close releases the ledger. Call it after Run returns.
@@ -138,7 +167,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	defer a.Queue.Wait()
 	defer cancel()
 
-	b := backoff{min: time.Second, max: 30 * time.Second}
+	retryMax := a.RetryMax
+	if retryMax == 0 {
+		retryMax = 10 * time.Second
+	}
+	b := backoff{min: time.Second, max: retryMax}
 
 	for ctx.Err() == nil {
 		err := a.Cloud.RegisterPrinters(ctx, a.printers)
