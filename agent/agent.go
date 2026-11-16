@@ -29,7 +29,7 @@ import (
 )
 
 // Version is reported in every poll's health payload.
-const Version = "0.3.1-m3"
+const Version = "0.3.2-m3"
 
 // Source is where the agent gets jobs: the cloud client, or a fake in tests.
 type Source interface {

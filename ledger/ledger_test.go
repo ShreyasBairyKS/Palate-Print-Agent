@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/fileacl"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 )
 
@@ -131,5 +133,23 @@ func TestCompactsAsItGrows(t *testing.T) {
 	}
 	if l.Len() != 1 {
 		t.Fatalf("Len = %d", l.Len())
+	}
+}
+
+func TestLedgerFileIsLockedDown(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ledger.bin")
+	plain := func(b []byte) ([]byte, error) { return b, nil }
+	l := open(t, path, Options{Protect: plain, Unprotect: plain})
+	l.Begin("j1")
+	desc, err := fileacl.Describe(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if !strings.HasPrefix(desc, "D:P") || strings.Contains(desc, ";;;BU)") || strings.Contains(desc, ";;;AU)") || strings.Contains(desc, ";;;WD)") {
+			t.Fatalf("ledger access list %q lets more than SYSTEM, Administrators and the agent in", desc)
+		}
+	} else if desc != "-rw-------" {
+		t.Fatalf("ledger permissions %s, want -rw-------", desc)
 	}
 }

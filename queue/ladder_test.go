@@ -244,3 +244,80 @@ func TestBadBackupConfigPanics(t *testing.T) {
 	New([]Printer{{ID: "p1", Name: "A", Width: job.Width80, Writer: &scriptWriter{}, Backup: "elsewhere"}},
 		newRecorder(), Config{Ledger: openLedger(t, "")})
 }
+
+// A failed job comes back when its failure never reached the server (the
+// router was off, say). By then the printer may be back, so it is tried again.
+func TestFailedJobIsRetriedWhenItComesBack(t *testing.T) {
+	refused := &printer.Error{Kind: printer.Refused, Err: errors.New("no route to host")}
+	w := &scriptWriter{results: []error{refused, refused, refused}, confirm: true}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "Tandoor", Width: job.Width80, Writer: w}}, rec, Config{})
+	j := testJob("j1", "p1")
+	q.Submit(context.Background(), j)
+	if r := rec.next(t); r.o.Kind != job.Failed {
+		t.Fatalf("first attempt: %+v, want failed", r.o)
+	}
+	settled(t, q, "j1")
+	q.Submit(context.Background(), j) // the server sends it again
+	r := rec.next(t)
+	if r.o.Kind != job.Printed || !strings.Contains(r.o.Reason, "retried") {
+		t.Fatalf("retry: %+v, want printed, saying it was retried", r.o)
+	}
+	if ticket := string(w.calls[len(w.calls)-1]); strings.Contains(ticket, "DUPLICATE") {
+		t.Fatal("nothing reached the paper the first time, so the retry must not say DUPLICATE")
+	}
+}
+
+func TestRetryAfterPartialWriteIsMarkedDuplicate(t *testing.T) {
+	partial := &printer.Error{Kind: printer.Partial, Written: 40, Err: errors.New("reset")}
+	w := &scriptWriter{results: []error{partial}, confirm: true}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "Tandoor", Width: job.Width80, Writer: w}}, rec, Config{})
+	j := testJob("j1", "p1")
+	q.Submit(context.Background(), j)
+	if r := rec.next(t); r.o.Kind != job.Failed {
+		t.Fatalf("first attempt: %+v, want failed", r.o)
+	}
+	settled(t, q, "j1")
+	q.Submit(context.Background(), j)
+	if r := rec.next(t); r.o.Kind != job.Printed {
+		t.Fatalf("retry: %+v, want printed", r.o)
+	}
+	ticket := string(w.calls[len(w.calls)-1])
+	if !strings.Contains(ticket, "DUPLICATE") || !strings.Contains(ticket, RetryAfterPartial) {
+		t.Fatal("part of the ticket may be on paper already, so the retry must be marked DUPLICATE")
+	}
+}
+
+func TestPrintedJobIsNeverRetried(t *testing.T) {
+	w := &scriptWriter{confirm: true}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "p1", Name: "Tandoor", Width: job.Width80, Writer: w}}, rec, Config{})
+	j := testJob("j1", "p1")
+	q.Submit(context.Background(), j)
+	rec.next(t)
+	q.Submit(context.Background(), j)
+	if r := rec.next(t); r.o.Kind != job.Printed {
+		t.Fatalf("re-report: %+v, want the stored printed outcome", r.o)
+	}
+	if n := w.n(); n != 1 {
+		t.Fatalf("printed %d times, want 1", n)
+	}
+}
+
+// settled waits until the queue has let go of a job (its report finished),
+// as it has by the time a real server sends the job again.
+func settled(t *testing.T, q *Queue, id string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		q.mu.Lock()
+		p := q.pending[id]
+		q.mu.Unlock()
+		if !p {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("job %s still pending", id)
+}

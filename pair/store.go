@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/dpapi"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/fileacl"
 )
 
 // entropy separates credential blobs from the agent's other DPAPI blobs.
@@ -72,6 +73,11 @@ func (s FileStore) Save(credential string) error {
 		return err
 	}
 	defer os.Remove(tmp.Name()) // no-op after a successful rename
+	// Lock the file down before the secret goes in; the rename keeps it.
+	if err := fileacl.Restrict(tmp.Name()); err != nil {
+		tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(blob); err != nil {
 		tmp.Close()
 		return err

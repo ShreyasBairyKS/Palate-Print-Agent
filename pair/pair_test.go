@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/fileacl"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/mockserver"
 )
 
@@ -80,5 +82,22 @@ func TestRedeem(t *testing.T) {
 	// Single use.
 	if _, err := Redeem(context.Background(), http.DefaultClient, ts.URL, code, "till-1", &MemStore{}); err == nil {
 		t.Fatal("second redeem succeeded")
+	}
+}
+
+func TestCredentialFileIsLockedDown(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("DPAPI is Windows-only")
+	}
+	path := filepath.Join(t.TempDir(), "credential.bin")
+	if err := (FileStore{Path: path}).Save("8b2d8961aa55c0ffee"); err != nil {
+		t.Fatal(err)
+	}
+	desc, err := fileacl.Describe(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(desc, "D:P") || strings.Contains(desc, ";;;BU)") || strings.Contains(desc, ";;;AU)") || strings.Contains(desc, ";;;WD)") {
+		t.Fatalf("credential file access list %q lets more than SYSTEM, Administrators and the agent in", desc)
 	}
 }

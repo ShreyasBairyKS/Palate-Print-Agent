@@ -9,6 +9,10 @@
 //   - After the write, whatever the result, record it as Done with its
 //     outcome and flush, before reporting the outcome.
 //   - A Done job is never printed again; its stored outcome is reported again.
+//     The exception is a failed job that comes back: its failure never
+//     reached the server, and the printer may be back, so it is tried again
+//     (marked DUPLICATE if the failed attempt may have put part of it on
+//     paper).
 //   - An Attempting job (the agent died mid-write) is never assumed printed:
 //     it prints again marked DUPLICATE, with the reason "crash-recovery".
 //
@@ -33,6 +37,7 @@ import (
 	"time"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/dpapi"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/fileacl"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 )
 
@@ -50,6 +55,9 @@ type Entry struct {
 	State   State       `json:"state"`
 	Outcome job.Outcome `json:"outcome"`
 	At      time.Time   `json:"at"`
+	// Partial is set on a failed job when the failed write may have put part
+	// of the ticket on paper, so a retry must be marked DUPLICATE.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // Options configures a ledger. Zero values are the production defaults.
@@ -161,6 +169,12 @@ func (l *Ledger) compact() error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
+	// Only SYSTEM, Administrators and the agent's account may open it; the
+	// rename keeps this. Every Open compacts, so older files get it too.
+	if err := fileacl.Restrict(tmp.Name()); err != nil {
+		tmp.Close()
+		return err
+	}
 	if _, err := tmp.Write(buf.Bytes()); err != nil {
 		tmp.Close()
 		return err
@@ -238,6 +252,14 @@ func (l *Ledger) Finish(id string, o job.Outcome) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.append(Entry{ID: id, State: Done, Outcome: o, At: l.opt.Now()})
+}
+
+// FinishPartial records a failed outcome after a write that may have put part
+// of the ticket on paper. It returns only once the record is on disk.
+func (l *Ledger) FinishPartial(id string, o job.Outcome) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.append(Entry{ID: id, State: Done, Outcome: o, At: l.opt.Now(), Partial: true})
 }
 
 // Len is the number of jobs in the ledger.

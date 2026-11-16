@@ -13,6 +13,10 @@
 #
 # Options (environment variables):
 #   REAL_PRINTER=192.168.1.50   print Tandoor's tickets on a real network printer
+#   REAL_USB_PRINTER="EPSON TM-T82 Receipt"
+#                               ...or on a real USB printer, by its Windows name
+#                               (see: bin/palate-agent printers)
+#   REAL_WIDTH=58               the real printer's paper width in mm (default 80)
 #   PORT=8080                   where the page and mock server listen
 #   NO_BROWSER=1                don't open the browser
 #
@@ -47,11 +51,20 @@ start() { # name, then the command
 CONTROLS="p-pass=http://127.0.0.1:19191,p-wok=http://127.0.0.1:19192"
 start pass ./bin/fakeprinter -name Pass -addr 127.0.0.1:19101 -control 127.0.0.1:19191 -out ""
 start wok ./bin/fakeprinter -name Wok -addr 127.0.0.1:19102 -control 127.0.0.1:19192 -out ""
+REAL_WIDTH=${REAL_WIDTH:-80}
+case "$REAL_WIDTH" in 58|80) ;; *) echo "REAL_WIDTH must be 58 or 80"; exit 1 ;; esac
+if [ -n "${REAL_PRINTER:-}" ] && [ -n "${REAL_USB_PRINTER:-}" ]; then
+  echo "set REAL_PRINTER or REAL_USB_PRINTER, not both"; exit 1
+fi
 if [ -n "${REAL_PRINTER:-}" ]; then
-  TANDOOR_ADDR=$REAL_PRINTER
-  echo "Tandoor tickets go to the real printer at $REAL_PRINTER"
+  TANDOOR_JSON="\"kind\": \"network\", \"address\": \"$REAL_PRINTER\", \"width\": $REAL_WIDTH"
+  echo "Tandoor tickets go to the real network printer at $REAL_PRINTER ($REAL_WIDTH mm)"
+elif [ -n "${REAL_USB_PRINTER:-}" ]; then
+  esc=$(printf '%s' "$REAL_USB_PRINTER" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  TANDOOR_JSON="\"kind\": \"usb\", \"printer_name\": \"$esc\", \"width\": $REAL_WIDTH"
+  echo "Tandoor tickets go to the real USB printer \"$REAL_USB_PRINTER\" ($REAL_WIDTH mm)"
 else
-  TANDOOR_ADDR=127.0.0.1:19100
+  TANDOOR_JSON='"kind": "network", "address": "127.0.0.1:19100", "width": 80'
   start tandoor ./bin/fakeprinter -name Tandoor -addr 127.0.0.1:19100 -control 127.0.0.1:19190 -out ""
   CONTROLS="p-tandoor=http://127.0.0.1:19190,$CONTROLS"
 fi
@@ -70,7 +83,7 @@ cat >"$OUT/front/agent.json" <<EOF
   "server": "$U",
   "agent_name": "front-till",
   "printers": [
-    {"id": "p-tandoor", "name": "Tandoor", "kind": "network", "address": "$TANDOOR_ADDR", "width": 80, "backup": "p-pass"},
+    {"id": "p-tandoor", "name": "Tandoor", $TANDOOR_JSON, "backup": "p-pass"},
     {"id": "p-pass", "name": "Pass", "kind": "network", "address": "127.0.0.1:19101", "width": 58}
   ]
 }

@@ -139,14 +139,7 @@ func cmdTestPrint(args []string) error {
 		if p.ID != *id {
 			continue
 		}
-		data, err := render.Render(job.Slip{
-			Station:     p.Name,
-			OrderNumber: "TEST",
-			Table:       "",
-			PlacedAt:    time.Now(),
-			Items: []job.Item{{Quantity: 1, Name: "Test print",
-				Notes: fmt.Sprintf("printer %s at %s, %d mm. If you can read this, it works.", p.ID, where(p), p.Width)}},
-		}, job.Width(p.Width))
+		data, err := render.Render(testSlip(p), job.Width(p.Width))
 		if err != nil {
 			return err
 		}
@@ -162,6 +155,26 @@ func cmdTestPrint(args []string) error {
 		return nil
 	}
 	return fmt.Errorf("test-print: no printer with id %q in the config", *id)
+}
+
+// testSlip exercises everything a real printer can get wrong in one ticket:
+// the large bold station name, bold item lines, accented letters (the code
+// page), Kannada (the raster path), an extra line, and the cut at the end.
+func testSlip(p config.Printer) job.Slip {
+	return job.Slip{
+		Station:     p.Name,
+		OrderNumber: "TEST",
+		PlacedAt:    time.Now(),
+		Extras: []job.Extra{
+			{Label: "Printer", Value: fmt.Sprintf("%s at %s, %d mm", p.ID, where(p), p.Width)},
+		},
+		Items: []job.Item{
+			{Quantity: 1, Name: "Test print", Notes: "if you can read this, text works"},
+			{Quantity: 2, Name: "Café crème brûlée", Notes: "accents: é è ê à ç ñ ü ö €"},
+			{Quantity: 1, Name: "ಮಸಾಲೆ ದೋಸೆ", Notes: "Kannada, printed as an image"},
+		},
+		Notes: "Wrong letters or boxes above? Check the printer's code page. The paper should be cut below.",
+	}
 }
 
 func where(p config.Printer) string {

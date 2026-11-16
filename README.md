@@ -65,11 +65,19 @@ The demo uses short timings so failures show quickly: a 10 s hold, a 20 s
 lease, and a till counts as not answering after 15 s. A till whose network
 comes back reconnects on its next retry, within about 12 s.
 
-To print Tandoor's tickets on a **real network printer**:
+To print Tandoor's tickets on a **real printer** (the rest stay simulated):
 
 ```bash
 REAL_PRINTER=192.168.1.50 bash scripts/demo-live.sh
 ```
+
+```bash
+REAL_USB_PRINTER="EPSON TM-T82 Receipt" REAL_WIDTH=58 bash scripts/demo-live.sh
+```
+
+`REAL_USB_PRINTER` takes the printer's Windows name, as `palate-agent
+printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
+80).
 
 ## Layout
 
@@ -83,6 +91,7 @@ REAL_PRINTER=192.168.1.50 bash scripts/demo-live.sh
 | `source/cloud/` | wire | Long-poll Fetch, Report, printer registration, credential rotation, refusing hostile jobs |
 | `pair/` | wire | Redeem a pairing code; the credential is stored with DPAPI at machine scope |
 | `internal/dpapi/` | wire | DPAPI at machine scope through crypt32.dll |
+| `internal/fileacl/` | wire | Locks the credential and ledger files to SYSTEM, Administrators and the agent's account (DPAPI at machine scope alone would let any account on the till decrypt them) |
 | `config/` | wire | The till's local config: server, printers and addresses, timings |
 | `printer/` | wire | The `Writer` interface and failure kinds (refused, hang, partial, paper out) |
 | `printer/net/` | wire | Raw TCP 9100 writer with a DLE EOT status check |
@@ -117,6 +126,24 @@ go test ./...
 
 ```bash
 bash scripts/demo.sh
+```
+
+The release build for a till (debugging information stripped, about 11 MB,
+about 5 MB compressed) goes to `dist/`, with its size and SHA-256:
+
+```bash
+bash scripts/build-release.sh
+```
+
+To fuzz the renderer or the job reader (both run their seed inputs as part of
+`go test`):
+
+```bash
+go test ./render -run '^$' -fuzz FuzzRender -fuzztime 60s
+```
+
+```bash
+go test ./source/cloud -run '^$' -fuzz FuzzParseJob -fuzztime 60s
 ```
 
 The demos need bash, curl and python. `go test -race` needs a 64-bit C
@@ -175,7 +202,7 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 | --- | --- |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
 | `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |
-| `palate-agent test-print -printer p-tandoor` | Prints a test slip and says whether the printer confirmed it |
+| `palate-agent test-print -printer p-tandoor` | Prints a test slip (bold, accented letters, a Kannada line and the cut, so one print checks what a real printer can get wrong) and says whether the printer confirmed it |
 | `palate-agent run` | Polls and prints in the foreground until Ctrl-C, or until the credential is revoked |
 
 Config rules:
@@ -219,7 +246,8 @@ Config rules:
 
    | Ledger says | What happens |
    | --- | --- |
-   | Done | The job is not printed; its stored outcome is reported again |
+   | Done, printed or written | The job is not printed; its stored outcome is reported again |
+   | Done, failed | Its failure never reached the server, and the printer may be back (the router was off, say), so it is tried again. If the failed attempt got bytes to the printer, the retry is marked DUPLICATE ("earlier attempt partly printed") |
    | Attempting (the agent died mid-write) | The job prints again with a DUPLICATE banner and the reason `crash-recovery` |
    | Nothing | The job prints normally |
 

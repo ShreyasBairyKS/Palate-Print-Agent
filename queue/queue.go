@@ -56,6 +56,7 @@ type Ledger interface {
 	Get(id string) (ledger.Entry, bool)
 	Begin(id string) error
 	Finish(id string, o job.Outcome) error
+	FinishPartial(id string, o job.Outcome) error
 }
 
 // Config holds the queue's ledger and timings. Zero timings take the
@@ -75,6 +76,10 @@ type Config struct {
 // CrashRecovery is the reason given when a job is printed again because the
 // agent died while writing it.
 const CrashRecovery = "crash-recovery"
+
+// RetryAfterPartial is the reason given when a failed job comes back and the
+// failed attempt may have put part of it on paper.
+const RetryAfterPartial = "earlier attempt partly printed"
 
 // State is a printer's health as last seen, for the poll's health payload.
 type State struct {
@@ -184,7 +189,7 @@ func (q *Queue) Submit(ctx context.Context, j job.Job) {
 	q.mu.Lock()
 	if q.pending[j.ID] {
 		q.mu.Unlock()
-		if prior, seen := q.cfg.Ledger.Get(j.ID); seen && prior.State == ledger.Done {
+		if prior, seen := q.cfg.Ledger.Get(j.ID); seen && prior.State == ledger.Done && prior.Outcome.Kind != job.Failed {
 			// On paper already; the first report is still being retried,
 			// perhaps stuck on a connection that died with the internet.
 			// Answer this delivery so the server doesn't give up on it.
@@ -315,18 +320,28 @@ func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, ne
 	var notes []string
 
 	recovering := false
+	var retry *ledger.Entry // a failed job that came back
 	if h == nil {
 		prior, seen := q.cfg.Ledger.Get(j.ID)
-		if seen && prior.State == ledger.Done {
-			// Printed (or failed) before; the report was lost. Report it again.
+		if seen && prior.State == ledger.Done && prior.Outcome.Kind != job.Failed {
+			// Printed before; the report was lost. Report it again.
 			q.cfg.Log.Info("job already done; reporting the stored outcome again", "job", j.ID, "outcome", prior.Outcome.Kind)
 			return prior.Outcome, stepReport
+		}
+		if seen && prior.State == ledger.Done {
+			// Failed before, and the failure never reached the server (or it
+			// wouldn't have sent the job again). The printer may be back, say
+			// after the router was off, so try again rather than repeat it.
+			retry = &prior
+			q.cfg.Log.Info("failed job came back; trying it again", "job", j.ID, "earlier", prior.Outcome.Reason)
 		}
 		recovering = seen && prior.State == ledger.Attempting
 
 		// A down printer with a backup sends its tickets straight there.
+		// It may already be partly on paper (a crash mid-write, or a failed
+		// attempt that got bytes out): then the backup copy is marked too.
 		if w.down() && w.p.Backup != "" {
-			q.handOff(w, t, "printer marked down ("+w.lastError()+")", false)
+			q.handOff(w, t, "printer marked down ("+w.lastError()+")", recovering || (retry != nil && retry.Partial))
 			return job.Outcome{}, stepHandedOff
 		}
 	}
@@ -343,6 +358,15 @@ func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, ne
 		slip.DuplicateReason = CrashRecovery
 		notes = append(notes, CrashRecovery)
 		q.cfg.Log.Warn("job was mid-write when the agent stopped; printing again as DUPLICATE", "job", j.ID)
+	}
+	if retry != nil && retry.Partial {
+		// The failed attempt may have put part of this ticket on paper.
+		slip.Duplicate = true
+		slip.DuplicateReason = RetryAfterPartial
+		notes = append(notes, RetryAfterPartial)
+	}
+	if retry != nil {
+		notes = append(notes, "retried after an earlier failure")
 	}
 	if h != nil {
 		slip.FallbackFrom = h.from.Name
@@ -392,8 +416,18 @@ func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, ne
 	if len(notes) > 0 {
 		o.Reason = strings.Trim(strings.Join(append(notes, o.Reason), "; "), "; ")
 	}
-	q.finish(j.ID, o)
+	if o.Kind == job.Failed && ((h != nil && h.partial) || wrote(werr)) {
+		q.finishPartial(j.ID, o)
+	} else {
+		q.finish(j.ID, o)
+	}
 	return o, stepReport
+}
+
+// wrote reports whether a failed write got any bytes to the printer.
+func wrote(err error) bool {
+	var pe *printer.Error
+	return errors.As(err, &pe) && pe.Written > 0
 }
 
 func (q *Queue) handOff(w *worker, t task, reason string, partial bool) {
@@ -404,6 +438,12 @@ func (q *Queue) handOff(w *worker, t task, reason string, partial bool) {
 
 func (q *Queue) finish(id string, o job.Outcome) {
 	if err := q.cfg.Ledger.Finish(id, o); err != nil {
+		q.cfg.Log.Error("ledger write failed after printing", "job", id, "err", err)
+	}
+}
+
+func (q *Queue) finishPartial(id string, o job.Outcome) {
+	if err := q.cfg.Ledger.FinishPartial(id, o); err != nil {
 		q.cfg.Log.Error("ledger write failed after printing", "job", id, "err", err)
 	}
 }
