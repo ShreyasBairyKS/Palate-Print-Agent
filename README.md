@@ -4,7 +4,7 @@ The Palate print agent: a Go service on the restaurant's Windows till that
 polls Palate's cloud for print jobs and writes each station's ticket to its
 printer, the moment an order is confirmed.
 
-**Status: M4 in progress: the Windows service is done; signed updates are next.**
+**Status: M4 in progress: the Windows service, customer bills (HTML), local printer changes and the handover package are done; signed updates are next.**
 
 - **Windows service:** installs under its own low-privilege account, starts
   with Windows, restarts after a failure, and stops cleanly: tickets in hand
@@ -145,7 +145,7 @@ go test ./...
 bash scripts/demo.sh
 ```
 
-The release build for a till (debugging information stripped, about 11 MB,
+The release build for a till (debugging information stripped, about 12 MB,
 about 5 MB compressed) goes to `dist/`, with its size and SHA-256:
 
 ```bash
