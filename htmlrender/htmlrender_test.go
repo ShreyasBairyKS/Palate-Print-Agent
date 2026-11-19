@@ -27,7 +27,7 @@ func TestLockdownRemovesEverythingThatRunsLoadsOrNavigates(t *testing.T) {
 <svg><script>alert(1)</script><image href="file:///C:/x.png"/></svg>
 <p>Total 798.00</p>
 </body></html>`
-	out, err := Lockdown(doc)
+	out, err := Lockdown(doc, 576)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,16 @@ func TestLockdownRemovesEverythingThatRunsLoadsOrNavigates(t *testing.T) {
 }
 
 func TestLockdownOfAFragmentStillGetsThePolicy(t *testing.T) {
-	out, err := Lockdown("<p>Just a paragraph</p>")
+	out, err := Lockdown("<p>Just a paragraph</p>", 384)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(out, "Content-Security-Policy") || !strings.Contains(out, "Just a paragraph") {
 		t.Fatalf("got %s", out)
+	}
+	if !strings.Contains(out, `class="paper-58"`) || !strings.Contains(out, `data-paper-dots="384"`) ||
+		!strings.Contains(out, "html{width:384px!important") {
+		t.Fatalf("the page is not fitted to 58 mm paper: %s", out)
 	}
 }
 
@@ -175,5 +179,34 @@ func TestEdgeRunsNoScripts(t *testing.T) {
 	}
 	if h := img.Bounds().Dy(); h > 200 {
 		t.Fatalf("picture is %d dots tall; the script ran", h)
+	}
+}
+
+func TestEdgeLaysThePageOutAtExactlyThePapersWidth(t *testing.T) {
+	e := edge(t)
+	// A 12-dot black bar pinned to the right edge, and a line of text that
+	// is only visible on 58 mm paper (via the paper-58 class).
+	doc := `<!doctype html><html><head><style>
+body{margin:0;background:#fff;font:20px Arial}
+p{margin:0}
+.edge{float:right;width:12px;height:40px;background:#000}
+.narrow{display:none} html.paper-58 .narrow{display:block;height:30px;background:#000}
+</style></head><body><div class="edge"></div><p>Bill</p><div class="narrow"></div></body></html>`
+	for _, width := range []int{576, 384} {
+		img, err := e.Render(context.Background(), doc, width)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if img.Bounds().Dx() != width {
+			t.Fatalf("%d: picture is %d wide", width, img.Bounds().Dx())
+		}
+		b := img.Bounds()
+		if !Ink(img, b.Min.X+width-4, b.Min.Y+10) || Ink(img, b.Min.X+width-20, b.Min.Y+10) {
+			t.Fatalf("%d: the right-edge bar is not at the paper's right edge; the page was laid out at another width", width)
+		}
+		narrowShown := inkRows(img, 44, b.Dy()) > 5 // below the 40-dot bar
+		if narrowShown != (width == 384) {
+			t.Fatalf("%d: paper-58 rule applied = %v", width, narrowShown)
+		}
 	}
 }

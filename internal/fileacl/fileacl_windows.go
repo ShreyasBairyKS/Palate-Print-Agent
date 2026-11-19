@@ -19,6 +19,10 @@ import (
 	"unsafe"
 )
 
+// advapi32.dll and kernel32.dll are among Windows' KnownDLLs, which always
+// load from System32 whatever the search order, so loading them by name is
+// safe. (golang.org/x/sys would pull in package net, and the ledger, which
+// uses this package, may not depend on it.)
 var (
 	advapi32              = syscall.NewLazyDLL("advapi32.dll")
 	procConvertStringSD   = advapi32.NewProc("ConvertStringSecurityDescriptorToSecurityDescriptorW")

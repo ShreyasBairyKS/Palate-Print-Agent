@@ -1,11 +1,14 @@
 package mockserver
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +147,20 @@ func TestSilenceAlsoStopsAHeldPoll(t *testing.T) {
 	}
 	if j := h.srv.Snapshot().Jobs[0]; j.Deliveries != 0 {
 		t.Fatalf("job delivered %d times to a silenced till", j.Deliveries)
+	}
+}
+
+func TestSampleBillMatchesTheExample(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("..", "..", "examples", "bill.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(sampleBill, want) {
+		t.Fatal("internal/mockserver/demo/bill.html differs from examples/bill.html; copy the example over")
+	}
+	h := newHarness(t, Config{})
+	resp, body := h.do("GET", "/mock/sample-bill", "", nil)
+	if resp.StatusCode != 200 || !bytes.Equal(body, want) {
+		t.Fatalf("GET /mock/sample-bill: %d", resp.StatusCode)
 	}
 }

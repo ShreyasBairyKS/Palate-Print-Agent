@@ -7,9 +7,11 @@
 # It installs the real service (under its own account), against a mock
 # server and a fake printer on this machine, then checks that:
 #   1. a ticket prints through the service
-#   2. stop and start work, and a ticket prints after the restart
-#   3. when the service process is killed, Windows restarts it by itself
-#   4. the data folder is closed to ordinary users
+#   2. an HTML bill prints through the service: hidden Edge runs under the
+#      service's own account and draws it, and its scratch folder is cleaned
+#   3. stop and start work, and a ticket prints after the restart
+#   4. when the service process is killed, Windows restarts it by itself
+#   5. the data folder is closed to ordinary users
 # and finally uninstalls the service and deletes everything it made. It
 # refuses to run if the service is already installed, so it never touches a
 # real installation.
@@ -79,6 +81,27 @@ printed() { # order number: wait up to 30 s for it on the fake printer
   for _ in $(seq 150); do grep -q "#$1" "$OUT/printer.log" && return 0; sleep 0.2; done
   return 1
 }
+bill() { # queue examples/bill.html as a document job; prints the job id
+  python -c "
+import json,sys
+html=open(sys.argv[1],encoding='utf-8').read()
+json.dump({'restaurant_id':'demo','jobs':[{'printer_id':'p-kitchen','document':{'type':'html','html':html}}]},open(sys.argv[2],'w',encoding='utf-8'))
+" examples/bill.html "$OUT/bill.json"
+  curl -sf -X POST $U/mock/jobs -H "Content-Type: application/json" --data-binary "@$(cygpath -w "$OUT/bill.json")" |
+    python -c "import json,sys; print(json.load(sys.stdin)['ids'][0])"
+}
+outcome() { # job id: wait up to 60 s for its outcome; prints "kind reason"
+  for _ in $(seq 300); do
+    o=$(curl -sf $U/mock/state | python -c "
+import json,sys
+for j in json.load(sys.stdin)['jobs']:
+    if j['id']==sys.argv[1] and j.get('outcome'): print(j['outcome']['kind'], j['outcome'].get('reason',''))
+" "$1")
+    [ -n "$o" ] && { echo "$o"; return 0; }
+    sleep 0.2
+  done
+  echo "none (no outcome within 60 s)"
+}
 state() { "$AGENT" status -log 0 2>/dev/null | sed -n 's/^Palate Print Agent: //p'; }
 pid() { "$AGENT" status -log 0 2>/dev/null | sed -n 's/^  process: *//p'; }
 
@@ -86,6 +109,16 @@ echo
 echo "checks:"
 order 9001
 if printed 9001; then pass "a ticket printed through the service"; else fail "no ticket printed through the service"; fi
+
+id=$(bill)
+o=$(outcome "$id")
+case "$o" in
+  printed*|written*) pass "an HTML bill printed through the service (Edge under the service account): $o" ;;
+  *) fail "the HTML bill did not print: $o" ;;
+esac
+if grep -q "GS v 0" "$OUT/printer.log"; then pass "the bill reached the printer as a picture"; else fail "no picture reached the printer"; fi
+left=$(find "$DATA/html-work" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
+if [ "$left" = 0 ]; then pass "the bill's scratch folder was cleaned up"; else fail "$left scratch folder(s) left in html-work"; fi
 
 "$AGENT" stop >/dev/null && [ "$(state)" = stopped ] && pass "stop" || fail "stop (state: $(state))"
 "$AGENT" start >/dev/null && [ "$(state)" = running ] && pass "start" || fail "start (state: $(state))"

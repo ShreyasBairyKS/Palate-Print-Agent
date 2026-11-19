@@ -11,11 +11,17 @@ import (
 	"unsafe"
 )
 
-// DPAPI through crypt32.dll, without third-party modules.
+// DPAPI through crypt32.dll, without third-party modules (golang.org/x/sys
+// would pull in package net, which arch_test.go forbids here).
+//
+// crypt32.dll is loaded by its full path in System32, never by name, so a
+// planted copy beside the program or in the current folder is never picked
+// up. kernel32.dll is one of Windows' KnownDLLs, which always load from
+// System32, so loading it by name is safe.
 
 var (
-	crypt32           = syscall.NewLazyDLL("crypt32.dll")
 	kernel32          = syscall.NewLazyDLL("kernel32.dll")
+	crypt32           = syscall.NewLazyDLL(systemDir() + `\crypt32.dll`)
 	procProtectData   = crypt32.NewProc("CryptProtectData")
 	procUnprotectData = crypt32.NewProc("CryptUnprotectData")
 	procLocalFree     = kernel32.NewProc("LocalFree")
@@ -85,4 +91,14 @@ func Unprotect(blob, entropy []byte) ([]byte, error) {
 	}
 	defer procLocalFree.Call(uintptr(unsafe.Pointer(out.pbData)))
 	return out.bytes(), nil
+}
+
+// systemDir is the System32 folder, asked of Windows itself.
+func systemDir() string {
+	buf := make([]uint16, 300)
+	n, _, _ := kernel32.NewProc("GetSystemDirectoryW").Call(uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 || int(n) >= len(buf) {
+		return `C:\Windows\System32`
+	}
+	return syscall.UTF16ToString(buf[:n])
 }

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bill B-2041</title>
+<style>
+  /* Fits both papers. The agent lays the page out exactly as wide as the
+     paper (576 px on 80 mm, 384 px on 58 mm) and marks <html> with the class
+     paper-80 or paper-58, so use the full width (no fixed width) and shrink
+     the type on the narrow roll. Black on white, no page breaks, everything
+     inline: the agent blocks scripts, network and files. */
+  body { margin: 0; padding: 6px 8px 0; box-sizing: border-box;
+         font: 21px/1.35 Arial, "Nirmala UI", sans-serif; color: #000; background: #fff; }
+  html.paper-58 body { font-size: 15px; padding: 4px 4px 0; }
+  html.paper-58 h1 { font-size: 23px; }
+  html.paper-58 .small, html.paper-58 .note { font-size: 13px; }
+  html.paper-58 .total td { font-size: 21px; }
+  html.paper-58 .logo { width: 44px; height: 44px; }
+  .c { text-align: center; }
+  h1 { font-size: 32px; margin: 4px 0 0; letter-spacing: 1px; }
+  .small { font-size: 18px; }
+  hr { border: 0; border-top: 2px dashed #000; margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 0; vertical-align: top; }
+  td.r { text-align: right; white-space: nowrap; padding-left: 12px; }
+  .note { font-size: 18px; padding-left: 28px; }
+  .total td { font-weight: bold; font-size: 30px; border-top: 3px solid #000; padding-top: 6px; }
+  .logo { display: block; margin: 0 auto; }
+</style>
+</head>
+<body>
+  <svg class="logo" width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+    <circle cx="32" cy="32" r="29" fill="none" stroke="#000" stroke-width="4"/>
+    <path d="M20 40 Q32 18 44 40 Z" fill="#000"/>
+  </svg>
+  <h1 class="c">PALATE KITCHEN</h1>
+  <div class="c small">12 MG Road, Bengaluru 560001</div>
+  <div class="c small">GSTIN 29ABCDE1234F1Z5</div>
+  <hr>
+  <table>
+    <tr><td>Bill #B-2041</td><td class="r">18 Nov 2026 19:42</td></tr>
+    <tr><td>Table 4 · 3 guests</td><td class="r">Order #1042</td></tr>
+  </table>
+  <hr>
+  <table>
+    <tr><td>2 x Paneer Tikka</td><td class="r">₹480.00</td></tr>
+    <tr><td>4 x ಬೆಣ್ಣೆ ನಾನ್</td><td class="r">₹240.00</td></tr>
+    <tr><td>1 x Veg Hakka Noodles</td><td class="r">₹180.00</td></tr>
+    <tr><td colspan="2" class="note">no onion</td></tr>
+    <tr><td>2 x मसाला चाय</td><td class="r">₹80.00</td></tr>
+  </table>
+  <hr>
+  <table>
+    <tr><td>Subtotal</td><td class="r">₹980.00</td></tr>
+    <tr><td>CGST 2.5%</td><td class="r">₹24.50</td></tr>
+    <tr><td>SGST 2.5%</td><td class="r">₹24.50</td></tr>
+    <tr class="total"><td>TOTAL</td><td class="r">₹1,029.00</td></tr>
+  </table>
+  <hr>
+  <div class="c">Paid by UPI · Thank you!</div>
+  <div class="c small">Served by Asha</div>
+</body>
+</html>

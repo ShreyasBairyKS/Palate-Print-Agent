@@ -18,7 +18,6 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -131,7 +130,7 @@ func cmdPair(args []string, log *slog.Logger) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	store := pair.FileStore{Path: cfg.CredentialFile}
-	dev, err := pair.Redeem(ctx, &http.Client{Timeout: 20 * time.Second}, cfg.Server, *code, cfg.AgentName, store)
+	dev, err := pair.Redeem(ctx, agent.NewHTTPClient(20*time.Second), cfg.Server, *code, cfg.AgentName, store)
 	if err != nil {
 		return err
 	}

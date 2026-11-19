@@ -65,7 +65,7 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 	if widthDots <= 0 || widthDots%8 != 0 {
 		return nil, fmt.Errorf("htmlrender: width %d dots is not a positive multiple of 8", widthDots)
 	}
-	page, err := Lockdown(doc)
+	page, err := Lockdown(doc, widthDots)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, Args(widthDots, maxH, shotPath, filepath.Join(dir, "profile"), fileURL(pagePath))...)
+	cmd := exec.CommandContext(ctx, exe, Args(widthDots+windowSlack, maxH, shotPath, filepath.Join(dir, "profile"), fileURL(pagePath))...)
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
@@ -126,11 +126,21 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 	if err != nil {
 		return nil, fmt.Errorf("htmlrender: reading Edge's picture: %w", err)
 	}
-	if got := img.Bounds().Dx(); got != widthDots {
-		return nil, fmt.Errorf("htmlrender: Edge drew %d dots wide, not %d (display scaling?)", got, widthDots)
+	b := img.Bounds()
+	if b.Dx() < widthDots {
+		return nil, fmt.Errorf("htmlrender: Edge drew %d dots wide, less than the paper's %d (display scaling?)", b.Dx(), widthDots)
 	}
-	return Trim(img, maxH)
+	// The page itself is pinned to the paper's width; the window is wider
+	// (see windowSlack), so keep just the paper.
+	return Trim(subImage(img, image.Rect(b.Min.X, b.Min.Y, b.Min.X+widthDots, b.Max.Y)), maxH)
 }
+
+// windowSlack is how much wider than the paper Edge's window is. Edge won't
+// make a window narrower than about 520 px, and loses some width to the
+// window's frame, so a 384-dot window lays the page out about 490 px wide.
+// Instead the window is made comfortably wider, the page's <html> is pinned
+// to the paper's width (see Lockdown), and the picture is cropped to it.
+const windowSlack = 240
 
 // Args are the command-line arguments Edge runs with.
 func Args(widthDots, heightDots int, shotPath, profileDir, url string) []string {
@@ -201,7 +211,13 @@ func subImage(img image.Image, r image.Rectangle) image.Image {
 
 // Lockdown parses doc and returns it with everything that can run code,
 // load anything or navigate removed, and the drawing policy first in <head>.
-func Lockdown(doc string) (string, error) {
+//
+// It also fits the page to the paper: <html> is pinned to widthDots CSS
+// pixels, and gets the class "paper-80" (576 dots) or "paper-58" (384 dots)
+// and a data-paper-dots attribute, so a design can adapt to the roll with
+// rules like "html.paper-58 body { font-size: 15px }". Media queries on
+// width don't see the paper, because Edge's window is wider than it.
+func Lockdown(doc string, widthDots int) (string, error) {
 	root, err := html.Parse(strings.NewReader(strings.TrimPrefix(doc, "\uFEFF")))
 	if err != nil {
 		return "", fmt.Errorf("htmlrender: parsing the document: %w", err)
@@ -215,8 +231,23 @@ func Lockdown(doc string) (string, error) {
 		{Key: "http-equiv", Val: "Content-Security-Policy"}, {Key: "content", Val: Policy}}}
 	charset := &html.Node{Type: html.ElementNode, DataAtom: atom.Meta, Data: "meta", Attr: []html.Attribute{
 		{Key: "charset", Val: "utf-8"}}}
+	fit := &html.Node{Type: html.ElementNode, DataAtom: atom.Style, Data: "style"}
+	fit.AppendChild(&html.Node{Type: html.TextNode, Data: fmt.Sprintf(
+		"html{width:%dpx!important;min-width:0!important;max-width:none!important;overflow:hidden!important}", widthDots)})
+	head.InsertBefore(fit, head.FirstChild)
 	head.InsertBefore(csp, head.FirstChild)
 	head.InsertBefore(charset, head.FirstChild)
+	if root := find(root, atom.Html); root != nil {
+		class := fmt.Sprintf("paper-%ddots", widthDots)
+		switch widthDots {
+		case 576:
+			class = "paper-80"
+		case 384:
+			class = "paper-58"
+		}
+		setAttr(root, "data-paper-dots", fmt.Sprint(widthDots))
+		addClass(root, class)
+	}
 
 	var out bytes.Buffer
 	if err := html.Render(&out, root); err != nil {
@@ -254,6 +285,26 @@ func strip(n *html.Node) {
 		strip(c)
 		c = next
 	}
+}
+
+func setAttr(n *html.Node, key, val string) {
+	for i, a := range n.Attr {
+		if strings.EqualFold(a.Key, key) {
+			n.Attr[i].Val = val
+			return
+		}
+	}
+	n.Attr = append(n.Attr, html.Attribute{Key: key, Val: val})
+}
+
+func addClass(n *html.Node, class string) {
+	for i, a := range n.Attr {
+		if strings.EqualFold(a.Key, "class") {
+			n.Attr[i].Val = strings.TrimSpace(a.Val + " " + class)
+			return
+		}
+	}
+	n.Attr = append(n.Attr, html.Attribute{Key: "class", Val: class})
 }
 
 func hasAttr(n *html.Node, key string) bool {

@@ -17,6 +17,12 @@ import (
 //go:embed demo/index.html
 var demoPage []byte
 
+// sampleBill is the demo's customer bill, a copy of examples/bill.html
+// (a test keeps the two the same).
+//
+//go:embed demo/bill.html
+var sampleBill []byte
+
 var controlClient = &http.Client{Timeout: 3 * time.Second}
 
 func (s *Server) addDemoRoutes() {
@@ -28,6 +34,11 @@ func (s *Server) addDemoRoutes() {
 	s.mux.HandleFunc("GET /{$}", serve)
 	s.mux.HandleFunc("GET /demo", serve)
 	s.mux.HandleFunc("GET /mock/demo-config", s.handleDemoConfig)
+	s.mux.HandleFunc("GET /mock/sample-bill", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write(sampleBill)
+	})
 	s.mux.HandleFunc("GET /mock/printer-control/{id}/{what}", s.proxyControl)
 	s.mux.HandleFunc("PUT /mock/printer-control/{id}/{what}", s.proxyControl)
 	s.mux.HandleFunc("DELETE /mock/printer-control/{id}/{what}", s.proxyControl)

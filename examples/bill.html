@@ -4,10 +4,18 @@
 <meta charset="utf-8">
 <title>Bill B-2041</title>
 <style>
-  /* Designed for 80 mm paper: 576 dots wide. Black on white, no page breaks,
-     everything inline: the agent blocks scripts, network and files. */
-  body { margin: 0; padding: 6px 8px 0; width: 576px; box-sizing: border-box;
+  /* Fits both papers. The agent lays the page out exactly as wide as the
+     paper (576 px on 80 mm, 384 px on 58 mm) and marks <html> with the class
+     paper-80 or paper-58, so use the full width (no fixed width) and shrink
+     the type on the narrow roll. Black on white, no page breaks, everything
+     inline: the agent blocks scripts, network and files. */
+  body { margin: 0; padding: 6px 8px 0; box-sizing: border-box;
          font: 21px/1.35 Arial, "Nirmala UI", sans-serif; color: #000; background: #fff; }
+  html.paper-58 body { font-size: 15px; padding: 4px 4px 0; }
+  html.paper-58 h1 { font-size: 23px; }
+  html.paper-58 .small, html.paper-58 .note { font-size: 13px; }
+  html.paper-58 .total td { font-size: 21px; }
+  html.paper-58 .logo { width: 44px; height: 44px; }
   .c { text-align: center; }
   h1 { font-size: 32px; margin: 4px 0 0; letter-spacing: 1px; }
   .small { font-size: 18px; }

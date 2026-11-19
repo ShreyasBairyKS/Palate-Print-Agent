@@ -5,10 +5,14 @@ package usbprinter
 import (
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
-	winspool             = syscall.NewLazyDLL("winspool.drv")
+	// From System32 only: winspool.drv is not a KnownDLL, so loading it by
+	// name could pick up a planted copy beside the program.
+	winspool             = windows.NewLazySystemDLL("winspool.drv")
 	procOpenPrinterW     = winspool.NewProc("OpenPrinterW")
 	procClosePrinter     = winspool.NewProc("ClosePrinter")
 	procStartDocPrinterW = winspool.NewProc("StartDocPrinterW")

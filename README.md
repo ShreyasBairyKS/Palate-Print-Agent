@@ -123,7 +123,7 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
 | `scripts/service-smoke.sh` | | As administrator: installs the real service against the mock, checks printing, stop/start, restart after a kill and the folder's access, then removes it all |
 | `scripts/build-release.sh` | | The release build for a till, with size and SHA-256 |
-| `examples/bill-80mm.html` | | A sample customer bill in HTML, designed for 80 mm paper |
+| `examples/bill.html` | | A sample customer bill in HTML that fits both 80 mm and 58 mm paper; `bill-80mm-printed.png` and `bill-58mm-printed.png` are how it printed |
 
 ## Build and test
 
@@ -372,8 +372,10 @@ How it prints:
    included) and every `on…` attribute. Its own Content-Security-Policy goes
    first in `<head>`: no scripts, no network, no files; only inline CSS and
    `data:` images and fonts.
-2. Headless Microsoft Edge (already on Windows 10 and 11) draws the page
-   576 dots wide for 80 mm paper or 384 for 58 mm, with a fresh throwaway
+2. Headless Microsoft Edge (already on Windows 10 and 11) draws the page,
+   pinned to 576 dots wide for 80 mm paper or 384 for 58 mm (Edge's window
+   is wider, because Edge won't open one narrower than about 520 px; the
+   picture is cropped to the paper), with a fresh throwaway
    profile, no extensions, and a proxy that goes nowhere, so nothing can
    leave the till even if the policy missed it. Edge listens on no port; it
    is handed a file and writes a screenshot back.
@@ -387,14 +389,20 @@ What Palate's HTML should be:
 - **Self-contained:** CSS in `<style>`, images as `data:` URIs or inline
   `<svg>`. Anything fetched from a URL is blocked and simply missing.
 - **No scripts.** They don't run.
-- **Sized for the paper:** 576 px wide for 80 mm, 384 px for 58 mm. Palate
-  knows each printer's width from `PUT /v1/printers`.
+- **Sized for the paper:** the page is laid out exactly 576 px wide for
+  80 mm and 384 px for 58 mm, and anything wider is cut off on the right.
+  Use the full width (no fixed `width` on the body). `<html>` gets the class
+  `paper-80` or `paper-58` (and `data-paper-dots`), so the narrow roll can
+  have its own rules, such as `html.paper-58 body { font-size: 15px }`, as
+  the sample does. Width media queries don't work: Edge's window is wider
+  than the paper. Palate also knows each printer's width from
+  `PUT /v1/printers`, so it can send a design per width instead.
 - **Black on white**, with no page breaks: one long strip, up to 150 cm.
   Grey prints as black or white; photos print poorly.
 - **Fonts:** Windows' own fonts cover Latin, Kannada, Hindi and Tamil
   (Nirmala UI). Others can be embedded as `data:` fonts.
 
-`examples/bill-80mm.html` is a sample. Drawing takes about a second per
+`examples/bill.html` is a sample. Drawing takes about a second per
 document on this machine (Edge starts fresh each time); documents are drawn
 one at a time. `edge_path` in the config points at Edge if it isn't in its
 usual place; `html_work_dir` (default `html-work` beside the config) holds

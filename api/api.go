@@ -99,7 +99,9 @@ type Job struct {
 // it at the printer's width (576 dots on 80 mm paper, 384 on 58 mm) and
 // prints it as a picture. Scripts, network and file access are all blocked
 // while it is drawn, so the page must carry its own CSS in <style> and its
-// images as data: URIs. Design it black on white, with no page breaks.
+// images as data: URIs. Design it black on white, with no page breaks, using
+// the full width: <html> is pinned to the paper's width and gets the class
+// "paper-80" or "paper-58" for rules specific to the roll.
 type Document struct {
 	Type      string `json:"type"` // "html"
 	HTML      string `json:"html"`

@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -95,27 +96,47 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 	return a, nil
 }
 
-// newHTTPClient is the client for Palate's server, tuned for a restaurant
-// line that drops out: a connection attempt gives up after 10 s, and TCP
-// keepalives (every 5 s once idle, 3 misses) notice within about 20 s that a
-// held poll's connection has died, instead of waiting for the poll's own
-// timeout. A server legitimately holding a poll still answers keepalives.
-func newHTTPClient() *http.Client {
+// ErrRedirect means Palate's server answered with a redirect. The agent's
+// endpoints never redirect, so following one could only send the credential
+// somewhere it shouldn't go (another host, or plain http).
+var ErrRedirect = errors.New("the server answered with a redirect; agent endpoints never redirect, so it was refused")
+
+func newHTTPClient() *http.Client { return NewHTTPClient(0) }
+
+// NewHTTPClient is the client for Palate's server, used for pairing and for
+// every call after it.
+//
+//   - TLS 1.2 or newer, checked against the Windows trust store.
+//   - Redirects are refused (ErrRedirect), so the bearer credential only
+//     ever goes to the configured server.
+//   - Tuned for a restaurant line that drops out: a connection attempt gives
+//     up after 10 s, and TCP keepalives (every 5 s once idle, 3 misses)
+//     notice within about 20 s that a held poll's connection has died,
+//     instead of waiting for the poll's own timeout. A server legitimately
+//     holding a poll still answers keepalives.
+//
+// timeout caps a whole request; 0 means none (each call sets its own).
+func NewHTTPClient(timeout time.Duration) *http.Client {
 	d := &net.Dialer{
 		Timeout: 10 * time.Second,
 		KeepAliveConfig: net.KeepAliveConfig{
 			Enable: true, Idle: 5 * time.Second, Interval: 5 * time.Second, Count: 3,
 		},
 	}
-	return &http.Client{Transport: &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           d.DialContext,
-		ForceAttemptHTTP2:     true,
-		TLSHandshakeTimeout:   10 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-		ExpectContinueTimeout: time.Second,
-		MaxIdleConns:          4,
-	}}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           d.DialContext,
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+			ExpectContinueTimeout: time.Second,
+			MaxIdleConns:          4,
+		},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return ErrRedirect },
+	}
 }
 
 // Close releases the ledger. Call it after Run returns.
