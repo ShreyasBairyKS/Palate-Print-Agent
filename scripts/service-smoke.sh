@@ -12,6 +12,8 @@
 #   3. stop and start work, and a ticket prints after the restart
 #   4. when the service process is killed, Windows restarts it by itself
 #   5. the data folder is closed to ordinary users
+#   6. "palate-agent printer set" saves a change, restarts the service, and
+#      tickets keep printing
 # and finally uninstalls the service and deletes everything it made. It
 # refuses to run if the service is already installed, so it never touches a
 # real installation.
@@ -144,6 +146,17 @@ else
   fail "data folder access is wrong:"; echo "$acl"
 fi
 if "$AGENT" status | grep -q "log lines"; then pass "status shows the service log"; else fail "status shows no log"; fi
+
+old=$(pid)
+out=$("$AGENT" printer set p-kitchen -name "Kitchen Two" -config "$DATA_WIN\agent.json" 2>&1)
+if echo "$out" | grep -q "restarted the service" && [ "$(pid)" != "$old" ] && grep -q '"Kitchen Two"' "$DATA/agent.json"; then
+  pass "printer set saved the change and restarted the service"
+else
+  fail "printer set: $out"
+fi
+if grep -q "Kitchen Two" "$DATA/logs/config-changes.log" 2>/dev/null; then pass "the change is in config-changes.log"; else fail "no entry in config-changes.log"; fi
+order 9004
+if printed 9004; then pass "a ticket printed after the printer change"; else fail "no ticket after the printer change"; fi
 
 echo
 "$AGENT" status

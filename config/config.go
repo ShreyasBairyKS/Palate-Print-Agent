@@ -23,37 +23,37 @@ import (
 
 // Config is the agent's local config file (JSON).
 type Config struct {
-	Server         string    `json:"server"`          // https://..., or http:// on loopback for the rig
-	AgentName      string    `json:"agent_name"`      // shown in the portal; defaults to the hostname
-	CredentialFile string    `json:"credential_file"` // defaults to credential.bin beside the config
-	LedgerFile     string    `json:"ledger_file"`     // defaults to ledger.bin beside the config
-	EdgePath       string    `json:"edge_path"`       // msedge.exe, for HTML documents; empty finds it
-	HTMLWorkDir    string    `json:"html_work_dir"`   // scratch space for drawing HTML; defaults to html-work beside the config
+	Server         string    `json:"server"`                    // https://..., or http:// on loopback for the rig
+	AgentName      string    `json:"agent_name,omitempty"`      // shown in the portal; defaults to the hostname
+	CredentialFile string    `json:"credential_file,omitempty"` // defaults to credential.bin beside the config
+	LedgerFile     string    `json:"ledger_file,omitempty"`     // defaults to ledger.bin beside the config
+	EdgePath       string    `json:"edge_path,omitempty"`       // msedge.exe, for HTML documents; empty finds it
+	HTMLWorkDir    string    `json:"html_work_dir,omitempty"`   // scratch space for drawing HTML; defaults to html-work beside the config
 	Printers       []Printer `json:"printers"`
-	Timings        Timings   `json:"timings"`
+	Timings        Timings   `json:"timings,omitzero"`
 }
 
 // Printer is one printer this till owns.
 type Printer struct {
-	ID          string `json:"id"`           // what jobs name it by
-	Name        string `json:"name"`         // "Tandoor", printed on MOVED FROM banners
-	Kind        string `json:"kind"`         // "network" or "usb"
-	Address     string `json:"address"`      // network: "192.168.1.50" or "192.168.1.50:9100"
-	PrinterName string `json:"printer_name"` // usb: the printer's name in Windows
-	Width       int    `json:"width"`        // 58 or 80
-	Backup      string `json:"backup"`       // id of another printer on this till, used when this one is down
+	ID          string `json:"id"`                     // what jobs name it by
+	Name        string `json:"name"`                   // "Tandoor", printed on MOVED FROM banners
+	Kind        string `json:"kind"`                   // "network" or "usb"
+	Address     string `json:"address,omitempty"`      // network: "192.168.1.50" or "192.168.1.50:9100"
+	PrinterName string `json:"printer_name,omitempty"` // usb: the printer's name in Windows
+	Width       int    `json:"width"`                  // 58 or 80
+	Backup      string `json:"backup,omitempty"`       // id of another printer on this till, used when this one is down
 }
 
 // Timings are the agent's tunable numbers. Zero values take the defaults
 // listed on each field.
 type Timings struct {
-	ConnectTimeout Duration `json:"connect_timeout"` // default 3s
-	StallTimeout   Duration `json:"stall_timeout"`   // write with no progress; default 10s
-	StatusTimeout  Duration `json:"status_timeout"`  // wait for a DLE EOT reply; default 500ms
-	FastRetries    int      `json:"fast_retries"`    // retries after a refused connection; default 2
-	RetryGap       Duration `json:"retry_gap"`       // default 1s
-	DelayedAfter   Duration `json:"delayed_after"`   // DELAYED banner past this age; default 10m
-	ProbeEvery     Duration `json:"probe_every"`     // how often a down printer is checked; default 30s
+	ConnectTimeout Duration `json:"connect_timeout,omitempty"` // default 3s
+	StallTimeout   Duration `json:"stall_timeout,omitempty"`   // write with no progress; default 10s
+	StatusTimeout  Duration `json:"status_timeout,omitempty"`  // wait for a DLE EOT reply; default 500ms
+	FastRetries    int      `json:"fast_retries,omitempty"`    // retries after a refused connection; default 2
+	RetryGap       Duration `json:"retry_gap,omitempty"`       // default 1s
+	DelayedAfter   Duration `json:"delayed_after,omitempty"`   // DELAYED banner past this age; default 10m
+	ProbeEvery     Duration `json:"probe_every,omitempty"`     // how often a down printer is checked; default 30s
 }
 
 // Duration is a time.Duration written as "3s" in JSON.

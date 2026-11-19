@@ -3,6 +3,7 @@
 //	palate-agent printers                  # Windows printers this process can see (for usb)
 //	palate-agent pair -code K7Q2-M9XD      # once per till, with a code from the portal
 //	palate-agent test-print -printer p-tandoor
+//	palate-agent printer list | set | add | remove   # change this till's printers
 //	palate-agent run                       # foreground (or as the service, when Windows starts it)
 //	palate-agent install                   # as administrator: install and start the Windows service
 //	palate-agent status | start | stop | uninstall
@@ -28,9 +29,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
-	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer"
 	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
-	"github.com/ShreyasBairyKS/Palate-Print-Agent/render"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
 )
 
@@ -49,6 +48,7 @@ commands:
   printers    list the Windows printers this process can see (for usb)
   pair        redeem a pairing code from the portal and register printers
   test-print  print a test slip on one printer
+  printer     list or change this till's printers: printer list | set | add | remove
   run         poll for jobs and print them (foreground)
   install     install the Windows service and start it (as administrator)
   status      show whether the service is running, with recent log lines
@@ -73,6 +73,8 @@ func main() {
 		err = cmdPair(args, log)
 	case "test-print":
 		err = cmdTestPrint(args)
+	case "printer":
+		err = cmdPrinter(args)
 	case "run":
 		err = cmdRun(args, log)
 	case "install":
@@ -153,24 +155,8 @@ func cmdTestPrint(args []string) error {
 	if err != nil {
 		return err
 	}
-	for _, p := range cfg.Printers {
-		if p.ID != *id {
-			continue
-		}
-		data, err := render.Render(testSlip(p), job.Width(p.Width))
-		if err != nil {
-			return err
-		}
-		res, err := agent.WriterFor(p, cfg.Timings).Write(context.Background(), data)
-		switch {
-		case err != nil:
-			return fmt.Errorf("test print on %s failed (%s): %w", p.ID, printer.KindOf(err), err)
-		case res.Confirmed:
-			fmt.Printf("printed on %s; the printer confirmed it\n", p.ID)
-		default:
-			fmt.Printf("written to %s; the printer can't confirm, so check the paper\n", p.ID)
-		}
-		return nil
+	if p := cfg.Find(*id); p != nil {
+		return testPrint(*p, cfg.Timings)
 	}
 	return fmt.Errorf("test-print: no printer with id %q in the config", *id)
 }

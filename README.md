@@ -217,12 +217,72 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 | --- | --- |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
 | `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |
+| `palate-agent printer list` / `set` / `add` / `remove` | As administrator: changes this till's printers without editing the file or contacting Palate (see below) |
 | `palate-agent test-print -printer p-tandoor` | Prints a test slip (bold, accented letters, a Kannada line and the cut, so one print checks what a real printer can get wrong) and says whether the printer confirmed it |
 | `palate-agent run` | Polls and prints in the foreground until Ctrl-C (tickets in hand finish first), or until the credential is revoked |
 | `palate-agent install` | As administrator: installs the Windows service and starts it if the till is paired (see below) |
 | `palate-agent status` | Whether the service is installed and running, its account, and its last log lines; needs no administrator rights |
 | `palate-agent start` / `stop` | As administrator. Stop lets the tickets in hand finish (up to 10 s) |
 | `palate-agent uninstall` | As administrator: stops and removes the service and the program; keeps the data folder |
+
+### Changing printers on the till
+
+A restaurant can change what only the till knows, without Palate's server
+and without editing `agent.json` by hand. From a terminal opened with "Run
+as administrator":
+
+```bash
+palate-agent printer list
+```
+
+```bash
+palate-agent printer set p-tandoor -address 192.168.1.60
+```
+
+```bash
+palate-agent printer set p-tandoor -backup p-pass
+```
+
+```bash
+palate-agent printer add p-grill -name Grill -address 192.168.1.70 -width 80
+```
+
+```bash
+palate-agent printer remove p-grill
+```
+
+| Allowed here | Flag |
+| --- | --- |
+| Where a printer is: a new IP address, a replacement printer, network to USB or back | `-address IP[:port]`, `-usb "Windows printer name"` |
+| Paper width | `-width 58` or `80` |
+| The name printed on BACKUP FOR banners | `-name` |
+| The backup printer on this till | `-backup ID`, or `-backup none` |
+| Adding or removing a printer | `printer add`, `printer remove` |
+
+Each change is:
+
+1. **Checked** by the same rules as the file: private IPs only, no
+   hostnames, width 58 or 80, a backup that exists on this till. Removing
+   the last printer, or one another printer uses as its backup, is refused.
+2. **Test-printed** on the printer it changes, before anything is saved. If
+   the test fails, nothing changes. `-no-test` saves anyway, for a printer
+   that is off right now.
+3. **Saved in one step,** with the old file kept as `agent.json.previous`
+   (copy it back to undo), and written to `logs\config-changes.log` with
+   the time and the Windows user.
+4. **Applied** by restarting the service, which sends Palate the new printer
+   list (ids, names, kinds and widths). `-no-restart` leaves that for later.
+
+Not allowed here, because Palate or pairing owns them:
+
+- **Which dishes a station cooks, and which printer a station or the bill
+  prints on.** Those links live in Palate. A new printer gets no jobs until
+  Palate links something to it; a removed printer's jobs are recorded as
+  failed until Palate is changed too.
+- **A printer's id.** Palate's jobs name it, so it can't be renamed; add a
+  new printer and remove the old one instead.
+- **The server address and the credential.** Moving or replacing a till
+  means pairing again with a code from Palate.
 
 ### The Windows service
 
