@@ -19,6 +19,28 @@ printers. It takes about 15 minutes per till.
   Palate portal ("Add a till"). Codes expire after 10 minutes, so get it
   when you reach step 5.
 
+## The quick way: double-click
+
+1. Unblock and extract the zip (step 1 below).
+2. **Double-click `palate-agent.exe`.** Windows asks to allow it to make
+   changes: choose **Yes**.
+3. Answer the questions in the window that opens:
+   - **Palate's server address** (`https://…`).
+   - **Each printer:** its name (Tandoor, Pass, Bill…), an id (press Enter to
+     accept the suggested one), its IP address or the number of a USB
+     printer from the list shown, and its paper width. A **test slip
+     prints** on each; if it fails, you can retry, skip the test, or fix the
+     details.
+   - **Backups (optional):** a printer to use when another is down.
+   - **The pairing code** from the Palate portal ("Add a till"), or press
+     Enter to pair later.
+4. Setup installs the service, pairs and starts it, then says **Done**.
+   Press Enter to close the window.
+
+Double-clicking again later shows the agent's status instead of setting it
+up twice. The steps below do the same thing one command at a time, for
+scripted installs or when something needs fixing.
+
 ## 1. Unpack and unblock
 
 The program isn't code-signed yet, so Windows may warn about it.
@@ -35,6 +57,10 @@ cd C:\PalatePrintAgent-setup
 If Windows Defender SmartScreen says "Windows protected your PC" when you
 run it, choose **More info → Run anyway**. (The signed release won't need
 this.)
+
+`palate-agent.exe` is a command-line program: run in PowerShell with a
+command, it does that one thing; double-clicked, it runs the guided setup
+above.
 
 ## 2. Find the printers
 

@@ -49,18 +49,27 @@ func cmdInstall(args []string) error {
 	if !service.IsElevated() {
 		return errNeedAdmin
 	}
+	return installService(*path, *account, *start)
+}
+
+// installService installs (and optionally starts) the service for the
+// config at path. The caller has checked for administrator rights.
+func installService(path, account string, start bool) error {
 	var acct string
-	switch strings.ToLower(*account) {
+	switch strings.ToLower(account) {
 	case "service":
 		acct = service.VirtualAccount
 	case "localsystem":
 		acct = service.LocalSystem
 	default:
-		return fmt.Errorf("install: -account must be service or localsystem, not %q", *account)
+		return fmt.Errorf("install: -account must be service or localsystem, not %q", account)
 	}
-	cfgPath, err := filepath.Abs(*path)
+	cfgPath, err := filepath.Abs(path)
 	if err != nil {
 		return err
+	}
+	if _, err := os.Stat(cfgPath); errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("install: there's no config at %s yet. Double-click palate-agent.exe for guided setup, or create it first with: palate-agent init <id> -server https://... -name NAME -address IP", cfgPath)
 	}
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
@@ -107,7 +116,7 @@ func cmdInstall(args []string) error {
 		fmt.Println("        can't see one, reinstall with -account localsystem.")
 	}
 
-	if !*start {
+	if !start {
 		fmt.Println("start it with: palate-agent start")
 		return nil
 	}

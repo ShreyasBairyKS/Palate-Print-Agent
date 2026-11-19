@@ -328,6 +328,9 @@ func find(n *html.Node, a atom.Atom) *html.Node {
 	return nil
 }
 
+// Find returns where Edge is, or ErrNoEdge.
+func (e *Edge) Find() (string, error) { return e.edgePath() }
+
 func (e *Edge) edgePath() (string, error) {
 	if e.Path != "" {
 		if _, err := os.Stat(e.Path); err != nil {

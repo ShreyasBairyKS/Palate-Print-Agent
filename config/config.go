@@ -202,6 +202,9 @@ func CheckPrinterAddress(s string) (string, error) {
 	return net.JoinHostPort(ip.String(), port), nil
 }
 
+// CheckServer applies the server rule on its own, for prompts.
+func CheckServer(s string) error { return checkServer(s) }
+
 // checkServer requires https, except plain http to a loopback address for
 // the mock server.
 func checkServer(s string) error {

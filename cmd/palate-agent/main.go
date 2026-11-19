@@ -1,5 +1,7 @@
 // Command palate-agent is the Palate print agent.
 //
+//	palate-agent                           # double-clicked: guided setup (asks for administrator rights)
+//	palate-agent setup                     # the same, from a terminal
 //	palate-agent printers                  # Windows printers this process can see (for usb)
 //	palate-agent init p-tandoor -server https://... -name Tandoor -address 192.168.1.50   # creates agent.json
 //	palate-agent pair -code K7Q2-M9XD      # once per till, with a code from the portal
@@ -46,6 +48,8 @@ func usage() {
 	fmt.Fprintln(os.Stderr, `usage: palate-agent <command> [flags]
 
 commands:
+  setup       guided setup: server, printers (test-printed), service, pairing, start
+              (this is what double-clicking palate-agent.exe does)
   printers    list the Windows printers this process can see (for usb)
   init        create the config with its first printer (test-printed): init <id> -server URL -name NAME -address IP | -usb NAME [-width 58|80]
   pair        redeem a pairing code from the portal and register printers
@@ -62,10 +66,18 @@ commands:
 }
 
 func main() {
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if len(os.Args) < 2 {
+		if startedByDoubleClick() {
+			// Double-clicked in Explorer: a console that would vanish at
+			// once. Run the guided setup instead of printing usage.
+			if err := cmdSetup(nil, log, true); err != nil {
+				os.Exit(1)
+			}
+			return
+		}
 		usage()
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
 	switch cmd {
@@ -79,6 +91,8 @@ func main() {
 		err = cmdPrinter(args)
 	case "init":
 		err = printerChange("init", args)
+	case "setup":
+		err = cmdSetup(args, log, false)
 	case "run":
 		err = cmdRun(args, log)
 	case "install":
@@ -133,23 +147,33 @@ func cmdPair(args []string, log *slog.Logger) error {
 	if *code == "" {
 		return errors.New("pair: -code is required")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	store := pair.FileStore{Path: cfg.CredentialFile}
-	dev, err := pair.Redeem(ctx, agent.NewHTTPClient(20*time.Second), cfg.Server, *code, cfg.AgentName, store)
+	dev, err := pairTill(cfg, *code, log)
 	if err != nil {
 		return err
-	}
-	a, err := agent.New(cfg, store, log)
-	if err != nil {
-		return err
-	}
-	defer a.Close()
-	if err := a.Cloud.RegisterPrinters(ctx, toAPI(cfg)); err != nil {
-		return fmt.Errorf("paired as %s, but registering printers failed (run will retry): %w", dev, err)
 	}
 	fmt.Printf("paired as %s; %d printer(s) registered. Run a test print on each before service.\n", dev, len(cfg.Printers))
 	return nil
+}
+
+// pairTill redeems a pairing code, stores the credential and registers the
+// printers. It returns the device id.
+func pairTill(cfg *config.Config, code string, log *slog.Logger) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store := pair.FileStore{Path: cfg.CredentialFile}
+	dev, err := pair.Redeem(ctx, agent.NewHTTPClient(20*time.Second), cfg.Server, code, cfg.AgentName, store)
+	if err != nil {
+		return "", err
+	}
+	a, err := agent.New(cfg, store, log)
+	if err != nil {
+		return "", err
+	}
+	defer a.Close()
+	if err := a.Cloud.RegisterPrinters(ctx, toAPI(cfg)); err != nil {
+		return dev, fmt.Errorf("paired as %s, but registering printers failed (the agent retries when it starts): %w", dev, err)
+	}
+	return dev, nil
 }
 
 func cmdTestPrint(args []string) error {
