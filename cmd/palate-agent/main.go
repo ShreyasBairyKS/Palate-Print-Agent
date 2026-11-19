@@ -3,10 +3,13 @@
 //	palate-agent printers                  # Windows printers this process can see (for usb)
 //	palate-agent pair -code K7Q2-M9XD      # once per till, with a code from the portal
 //	palate-agent test-print -printer p-tandoor
-//	palate-agent run                       # foreground; the Windows service arrives in M4
+//	palate-agent run                       # foreground (or as the service, when Windows starts it)
+//	palate-agent install                   # as administrator: install and start the Windows service
+//	palate-agent status | start | stop | uninstall
 //	palate-agent version
 //
-// Every command takes -config (default %ProgramData%\PalatePrintAgent\agent.json).
+// Every command that reads the config takes -config (default
+// %ProgramData%\PalatePrintAgent\agent.json).
 package main
 
 import (
@@ -29,6 +32,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer"
 	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/render"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
 )
 
 func defaultConfigPath() string {
@@ -47,6 +51,11 @@ commands:
   pair        redeem a pairing code from the portal and register printers
   test-print  print a test slip on one printer
   run         poll for jobs and print them (foreground)
+  install     install the Windows service and start it (as administrator)
+  status      show whether the service is running, with recent log lines
+  start       start the service (as administrator)
+  stop        stop the service, letting tickets in hand finish (as administrator)
+  uninstall   stop and remove the service; the data folder is kept (as administrator)
   version     print the agent version`)
 	os.Exit(2)
 }
@@ -67,6 +76,16 @@ func main() {
 		err = cmdTestPrint(args)
 	case "run":
 		err = cmdRun(args, log)
+	case "install":
+		err = cmdInstall(args)
+	case "uninstall":
+		err = cmdUninstall()
+	case "start":
+		err = cmdStart()
+	case "stop":
+		err = cmdStop()
+	case "status":
+		err = cmdStatus(args)
 	case "version":
 		fmt.Println(agent.Version)
 	default:
@@ -95,7 +114,7 @@ func cmdPrinters() error {
 	for _, n := range names {
 		fmt.Println("  " + n)
 	}
-	fmt.Println("The service runs as LocalSystem, which sees only printers installed for all users.")
+	fmt.Println("The service runs as its own account (NT SERVICE\\PalatePrintAgent), which sees only printers installed for all users.")
 	return nil
 }
 
@@ -186,24 +205,21 @@ func where(p config.Printer) string {
 
 func cmdRun(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	cfg, err := loadConfig(fs, args)
+	path := fs.String("config", defaultConfigPath(), "path to agent.json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if isSvc, err := service.IsService(); err == nil && isSvc {
+		return runService(*path)
+	}
+	cfg, err := config.Load(*path)
 	if err != nil {
 		return err
 	}
-	store := pair.FileStore{Path: cfg.CredentialFile}
-	if _, err := store.Load(); err != nil {
-		return err
-	}
+	// Ctrl-C stops cleanly: tickets in hand finish first.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	log.Info("palate-agent starting", "version", agent.Version, "server", cfg.Server, "printers", len(cfg.Printers))
-	agent.CheckUSB(cfg, log)
-	a, err := agent.New(cfg, store, log)
-	if err != nil {
-		return err
-	}
-	defer a.Close()
-	return a.Run(ctx)
+	return runAgent(ctx, cfg, log)
 }
 
 func toAPI(cfg *config.Config) []api.Printer {

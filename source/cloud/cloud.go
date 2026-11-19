@@ -246,7 +246,32 @@ func parseJob(raw json.RawMessage) (job.Job, []string, error) {
 	if looksLikeAddress(aj.PrinterID) {
 		return job.Job{}, nil, fmt.Errorf("rejected: printer_id %q is an address; jobs name printers by id", aj.PrinterID)
 	}
+	if err := checkDocument(aj); err != nil {
+		return job.Job{}, nil, fmt.Errorf("rejected: %w", err)
+	}
 	return toJob(aj), unknown, nil
+}
+
+// checkDocument enforces the rules for a document job: exactly one of slip
+// or document, a type this agent can print, and a size it will accept.
+func checkDocument(aj api.Job) error {
+	d := aj.Document
+	if d == nil {
+		return nil
+	}
+	if aj.Slip.Station != "" || len(aj.Slip.Items) > 0 || aj.Slip.OrderNumber != "" {
+		return errors.New("job carries both a slip and a document; it must carry one")
+	}
+	if d.Type != api.DocumentHTML {
+		return fmt.Errorf("document type %q is not one this agent prints (only %q)", d.Type, api.DocumentHTML)
+	}
+	if strings.TrimSpace(d.HTML) == "" {
+		return errors.New("document has no html")
+	}
+	if len(d.HTML) > api.MaxDocumentBytes {
+		return fmt.Errorf("document is %d bytes; the most this agent prints is %d", len(d.HTML), api.MaxDocumentBytes)
+	}
+	return nil
 }
 
 // forbidden are field names that try to steer printing: where to send the
@@ -270,7 +295,8 @@ var (
 		"station": nil, "table": nil, "order_number": nil, "placed_at": nil, "notes": nil,
 		"duplicate": nil, "moved_from": nil, "items": itemShape, "extras": extraShape,
 	}
-	jobShape = shape{"id": nil, "printer_id": nil, "created_at": nil, "slip": slipShape}
+	documentShape = shape{"type": nil, "html": nil, "duplicate": nil, "moved_from": nil}
+	jobShape      = shape{"id": nil, "printer_id": nil, "created_at": nil, "slip": slipShape, "document": documentShape}
 )
 
 // inspect walks a JSON value. It returns the paths of fields not in known
@@ -402,7 +428,15 @@ func toJob(a api.Job) job.Job {
 			Duplicate:   a.Slip.Duplicate,
 			MovedFrom:   a.Slip.MovedFrom,
 		},
+		Document: toDocument(a.Document),
 	}
+}
+
+func toDocument(d *api.Document) *job.Document {
+	if d == nil {
+		return nil
+	}
+	return &job.Document{HTML: d.HTML, Duplicate: d.Duplicate, MovedFrom: d.MovedFrom}
 }
 
 // Report records a job's outcome. A repeated report is a no-op on the server.

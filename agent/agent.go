@@ -17,6 +17,7 @@ import (
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/api"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/htmlrender"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/ledger"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
@@ -29,7 +30,7 @@ import (
 )
 
 // Version is reported in every poll's health payload.
-const Version = "0.3.2-m3"
+const Version = "0.4.0-m4"
 
 // Source is where the agent gets jobs: the cloud client, or a fake in tests.
 type Source interface {
@@ -52,6 +53,10 @@ type Agent struct {
 	// reached, so the agent is back within seconds of the internet
 	// returning. Default 10 s; waits start at 1 s and carry ±20% jitter.
 	RetryMax time.Duration
+	// StopGrace is how long stopping waits for tickets already on the till
+	// to finish printing before the queue is cancelled. Polling stops at
+	// once. Default 10 s; Windows gives a stopping service 20 s.
+	StopGrace time.Duration
 
 	printers []api.Printer
 
@@ -85,6 +90,7 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 		DelayedAfter: cfg.Timings.DelayedAfter.D(),
 		ProbeEvery:   cfg.Timings.ProbeEvery.D(),
 		Log:          log,
+		HTML:         &htmlrender.Edge{Path: cfg.EdgePath, WorkDir: cfg.HTMLWorkDir},
 	})
 	return a, nil
 }
@@ -159,12 +165,23 @@ func fatal(err error) bool {
 }
 
 // Run polls until ctx is done or the credential stops working.
+//
+// Stopping is clean: polling stops at once, but tickets already on the till
+// get up to StopGrace to finish printing before the queue is cancelled, so
+// a service stop or a Windows Update restart doesn't cut a ticket in half.
+// Anything still unfinished comes back after its lease (a ticket cut off
+// mid-write prints again marked DUPLICATE).
 func (a *Agent) Run(ctx context.Context) error {
-	// The queue stops when Run returns for any reason, not only when the
-	// caller cancels: defers run in reverse, so cancel comes before Wait.
+	// The queue has its own context, cancelled only after the drain. Defers
+	// run in reverse: polling's cancel first, then drain, cancel and wait.
+	qctx, qcancel := context.WithCancel(context.Background())
+	a.Queue.Start(qctx)
+	defer func() {
+		a.drain()
+		qcancel()
+		a.Queue.Wait()
+	}()
 	ctx, cancel := context.WithCancel(ctx)
-	a.Queue.Start(ctx)
-	defer a.Queue.Wait()
 	defer cancel()
 
 	retryMax := a.RetryMax
@@ -215,6 +232,22 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// drain waits, up to StopGrace, for the queue to finish the tickets in hand.
+func (a *Agent) drain() {
+	grace := a.StopGrace
+	if grace == 0 {
+		grace = 10 * time.Second
+	}
+	deadline := time.Now().Add(grace)
+	for a.Queue.Depth() > 0 {
+		if time.Now().After(deadline) {
+			a.Log.Warn("stopping with tickets unfinished; they come back after their lease", "unfinished", a.Queue.Depth())
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 var errStalled = errors.New("watchdog: poll stalled; abandoned it and started a fresh one")

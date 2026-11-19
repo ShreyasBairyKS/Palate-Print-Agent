@@ -24,7 +24,9 @@ func (w Width) Valid() bool { return w == Width58 || w == Width80 }
 
 func (w Width) String() string { return fmt.Sprintf("%dmm", int(w)) }
 
-// Job is one station's ticket for one order, as fetched from a JobSource.
+// Job is one thing to print, as fetched from a JobSource: a station's ticket
+// for one order (Slip), or a finished document such as a customer bill
+// (Document). Exactly one of them is set.
 //
 // A job names its printer by id only. It never carries a printer address and
 // never carries raw printer bytes: addresses live in the till's local config,
@@ -32,8 +34,19 @@ func (w Width) String() string { return fmt.Sprintf("%dmm", int(w)) }
 type Job struct {
 	ID        string    // unique per job; the ledger key
 	PrinterID string    // id from the till's local config, never an address
-	Slip      Slip      // what to print
+	Slip      Slip      // what to print, for a kitchen ticket
+	Document  *Document // set instead of Slip for a finished document
 	CreatedAt time.Time // when the order was confirmed (server clock)
+}
+
+// Document is a finished document from the server, printed as it is: the
+// server owns its design, and the agent only fits it to the paper. The only
+// kind today is an HTML page, drawn at the printer's width and printed as a
+// picture.
+type Document struct {
+	HTML      string
+	Duplicate bool   // the server marks a reprint DUPLICATE
+	MovedFrom string // printer the server moved this job from
 }
 
 // Slip is everything a kitchen order ticket (KOT) shows, and nothing more.

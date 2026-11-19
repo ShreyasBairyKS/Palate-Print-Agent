@@ -42,3 +42,39 @@ func TestRestrictLeavesOnlyTheAgentAndAdmins(t *testing.T) {
 		t.Fatalf("the agent's own account lost access: %v", err)
 	}
 }
+
+func TestRestrictDirLetsTheServiceInAndBroadGroupsOut(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	inherited := filepath.Join(dir, "agent.json")
+	if err := os.WriteFile(inherited, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { unlock(t, dir) })
+	if err := RestrictDir(dir); err != nil {
+		if runtime.GOOS == "windows" && strings.Contains(err.Error(), "Access is denied") {
+			t.Skip("needs to own the folder")
+		}
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		return
+	}
+	for _, p := range []string{dir, inherited} {
+		desc, err := Describe(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%s: %s", filepath.Base(p), desc)
+		if !strings.Contains(desc, ServiceSID(ServiceName)) {
+			t.Fatalf("%s: access list %q does not include the service account", p, desc)
+		}
+		for _, broad := range []string{";;;BU)", ";;;AU)", ";;;WD)"} {
+			if strings.Contains(desc, broad) {
+				t.Fatalf("%s: access list %q still lets a broad group in (%s)", p, desc, broad)
+			}
+		}
+	}
+}

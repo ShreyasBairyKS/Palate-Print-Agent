@@ -17,8 +17,9 @@ const (
 )
 
 // MaxResponseBytes is the most the agent will read from any response. A
-// larger body is an attack or a bug; the agent must refuse it.
-const MaxResponseBytes = 1 << 20 // 1 MiB
+// larger body is an attack or a bug; the agent must refuse it. It leaves room
+// for a few HTML documents (MaxDocumentBytes each) in one poll response.
+const MaxResponseBytes = 4 << 20 // 4 MiB
 
 // PairRequest redeems a single-use pairing code.
 type PairRequest struct {
@@ -86,7 +87,31 @@ type Job struct {
 	PrinterID string    `json:"printer_id"`
 	CreatedAt time.Time `json:"created_at"`
 	Slip      Slip      `json:"slip"`
+	// Document is set instead of Slip when the server sends a finished
+	// document to print as it is, such as a customer bill. The server owns
+	// its whole design; the agent only fits it to the printer's paper.
+	Document *Document `json:"document,omitempty"`
 }
+
+// Document is a finished document for the agent to print as it is.
+//
+// The only type today is "html": a self-contained HTML page. The agent draws
+// it at the printer's width (576 dots on 80 mm paper, 384 on 58 mm) and
+// prints it as a picture. Scripts, network and file access are all blocked
+// while it is drawn, so the page must carry its own CSS in <style> and its
+// images as data: URIs. Design it black on white, with no page breaks.
+type Document struct {
+	Type      string `json:"type"` // "html"
+	HTML      string `json:"html"`
+	Duplicate bool   `json:"duplicate,omitempty"`
+	MovedFrom string `json:"moved_from,omitempty"` // set by the server when it moves the job
+}
+
+// DocumentHTML is the Document type for an HTML page.
+const DocumentHTML = "html"
+
+// MaxDocumentBytes is the largest HTML document the agent will print.
+const MaxDocumentBytes = 1 << 20 // 1 MiB
 
 type Slip struct {
 	Station     string    `json:"station"`

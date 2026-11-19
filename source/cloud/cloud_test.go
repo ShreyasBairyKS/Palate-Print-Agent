@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -186,5 +187,37 @@ func TestNotPaired(t *testing.T) {
 	c := &Client{Server: "http://127.0.0.1:1", Store: &pair.MemStore{}}
 	if _, err := c.Fetch(context.Background()); !errors.Is(err, pair.ErrNotPaired) {
 		t.Fatalf("err = %v, want ErrNotPaired", err)
+	}
+}
+
+func TestDocumentJobArrives(t *testing.T) {
+	f := setup(t, time.Second)
+	f.srv.NewDocument("r1", "p1", "<p>Total 798.00</p>")
+	jobs, err := f.client.Fetch(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].Document == nil || jobs[0].Document.HTML != "<p>Total 798.00</p>" {
+		t.Fatalf("jobs = %+v; want one HTML document", jobs)
+	}
+}
+
+func TestDocumentRules(t *testing.T) {
+	big := strings.Repeat("x", api.MaxDocumentBytes+1)
+	for name, raw := range map[string]string{
+		"both slip and document": `{"id":"j1","printer_id":"p1","slip":{"station":"Tandoor","items":[{"quantity":1,"name":"Naan"}]},"document":{"type":"html","html":"<p>x</p>"}}`,
+		"unknown type":           `{"id":"j1","printer_id":"p1","document":{"type":"pdf","html":"<p>x</p>"}}`,
+		"empty html":             `{"id":"j1","printer_id":"p1","document":{"type":"html","html":"  "}}`,
+		"too large":              `{"id":"j1","printer_id":"p1","document":{"type":"html","html":"` + big + `"}}`,
+		"address inside":         `{"id":"j1","printer_id":"p1","document":{"type":"html","html":"<p>x</p>","printer_ip":"10.0.0.5"}}`,
+		"raw bytes inside":       `{"id":"j1","printer_id":"p1","document":{"type":"html","html":"<p>x</p>","raw":"G0A="}}`,
+	} {
+		if _, _, err := parseJob([]byte(raw)); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	j, _, err := parseJob([]byte(`{"id":"j1","printer_id":"p1","slip":{},"document":{"type":"html","html":"<p>ok</p>","duplicate":true,"moved_from":"Front"}}`))
+	if err != nil || j.Document == nil || !j.Document.Duplicate || j.Document.MovedFrom != "Front" {
+		t.Fatalf("a good document job: %+v, %v", j, err)
 	}
 }

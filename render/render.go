@@ -76,24 +76,8 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 	b.Write(cmdCodePage)
 
 	// Banners first, so nobody misses them.
-	if slip.Duplicate {
-		r.banner("DUPLICATE")
-		if slip.DuplicateReason != "" {
-			b.Write(cmdAlignCentre)
-			r.block(slip.DuplicateReason, cols, 0, "", "", style{centre: true})
-		}
-	}
-	if slip.MovedFrom != "" {
-		r.banner("MOVED FROM " + strings.ToUpper(slip.MovedFrom))
-		b.Write(cmdAlignCentre)
-		r.text("check for duplicate")
-	}
-	if slip.FallbackFrom != "" {
-		r.banner("BACKUP FOR " + strings.ToUpper(slip.FallbackFrom))
-	}
-	if slip.Delayed {
-		r.banner("DELAYED")
-	}
+	r.banners(Banners{Duplicate: slip.Duplicate, DuplicateReason: slip.DuplicateReason,
+		MovedFrom: slip.MovedFrom, FallbackFrom: slip.FallbackFrom, Delayed: slip.Delayed})
 
 	// Station, large and centred. Double width halves the line length.
 	b.Write(cmdAlignCentre)

@@ -2,7 +2,8 @@ package main_test
 
 // Architecture rules, checked on every `go test ./...`.
 //
-//   - render opens no socket: it must not depend on net at all.
+//   - render opens no socket: it must not depend on net at all. Nor does
+//     htmlrender: Edge is handed a local file, and the agent never talks to it.
 //   - Nothing below JobSource (queue, ladder, render, printer writers) may
 //     depend on net/http. The printer writers need raw TCP, so they may use
 //     net, but never HTTP.
@@ -25,6 +26,7 @@ var rules = []struct {
 	forbidden []string
 }{
 	{"render", []string{"net", "net/http", "crypto/tls"}},
+	{"htmlrender", []string{"net", "net/http", "crypto/tls"}},
 	{"job", []string{"net", "net/http"}},
 	{"config", []string{"net/http"}},
 	{"ledger", []string{"net", "net/http"}},

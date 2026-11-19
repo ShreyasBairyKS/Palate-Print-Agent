@@ -4,7 +4,13 @@ The Palate print agent: a Go service on the restaurant's Windows till that
 polls Palate's cloud for print jobs and writes each station's ticket to its
 printer, the moment an order is confirmed.
 
-**Status: M3.**
+**Status: M4 in progress: the Windows service is done; signed updates are next.**
+
+- **Windows service:** installs under its own low-privilege account, starts
+  with Windows, restarts after a failure, and stops cleanly: tickets in hand
+  finish before it exits (`agent.TestStopLetsTheTicketInHandFinish`,
+  `service.TestStopFinishesTheAgentCleanly`). `scripts/service-smoke.sh`
+  checks it end to end on a real PC, as administrator.
 
 - **Hostile server:** every hostile mock flag ends in a correct recorded
   outcome (`TestM3EveryHostileFlagEndsInARecordedOutcome`).
@@ -87,6 +93,8 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `source/` | seam | The `JobSource` interface |
 | `render/` | paper | `Render(slip, width)` at 58/80 mm: text in WPC1252, or raster for Kannada, Devanagari and Tamil; golden tests and PNG previews in `testdata/` |
 | `render/fonts/` | paper | Bundled Noto fonts (OFL), embedded in the binary |
+| `render/picture.go` | paper | `Picture(banners, image, width)`: a document already drawn as an image, printed as raster bands with the same banners as a ticket |
+| `htmlrender/` | paper | Draws an HTML document (a customer bill) at the paper's width with headless Microsoft Edge, locked down: no scripts, network or files |
 | `ledger/` | wire | The printed-ID ledger: Attempting/Done per job, DPAPI-protected, append-only, 7-day retention |
 | `source/cloud/` | wire | Long-poll Fetch, Report, printer registration, credential rotation, refusing hostile jobs |
 | `pair/` | wire | Redeem a pairing code; the credential is stored with DPAPI at machine scope |
@@ -99,11 +107,13 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, failure ladder to the backup, probing down printers, report |
 | `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
-| `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `version` |
+| `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `install`, `status`, `start`, `stop`, `uninstall`, `version` |
+| `service/` | | The Windows service: start, clean stop, install with restart-on-failure, status |
+| `internal/logfile/` | | The service's log file, rotated by size |
 | `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder and ticket preview, fake printer with a control API, mock server |
 | `internal/mockserver/demo/` | rig | The live demo page, served by the mock server |
 | `cmd/escpos-dump/`, `cmd/fakeprinter/`, `cmd/mockpalate/` | rig | Command-line wrappers |
-| `arch_test.go` | seam | `render`, `job`, `ledger`, `internal/dpapi` may not import `net`; `queue`, `printer/*`, `config` may not import `net/http` |
+| `arch_test.go` | seam | `render`, `htmlrender`, `job`, `ledger`, `internal/dpapi` may not import `net`; `queue`, `printer/*`, `config` may not import `net/http` |
 | `e2e_test.go` | | The real agent against the mock server and fake printers |
 | `crash_test.go` | | Builds `palate-agent`, kills it mid-write, restarts it |
 | `m3_test.go` | | Hostile flags, a hanging printer to its backup, a silent till's jobs on another till |
@@ -111,6 +121,9 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `scripts/demo-live.sh` | | **Live demo in the browser**: two tills, three printers, break things on purpose |
 | `scripts/demo.sh` | | Scripted demo: pair, test print, run, an order with a Kannada dish prints |
 | `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
+| `scripts/service-smoke.sh` | | As administrator: installs the real service against the mock, checks printing, stop/start, restart after a kill and the folder's access, then removes it all |
+| `scripts/build-release.sh` | | The release build for a till, with size and SHA-256 |
+| `examples/bill-80mm.html` | | A sample customer bill in HTML, designed for 80 mm paper |
 
 ## Build and test
 
@@ -177,6 +190,8 @@ real printers in M4 is how fast they print a 576-dot raster line, and whether
 | --- | --- | --- |
 | `github.com/go-text/typesetting` | BSD-3-Clause / Unlicense | HarfBuzz shaping for Indian scripts |
 | `golang.org/x/image` | BSD-3-Clause | Rasterising glyph outlines |
+| `golang.org/x/net` (`html` only) | BSD-3-Clause | Parsing HTML documents to strip scripts, frames and links before drawing |
+| `golang.org/x/sys` | BSD-3-Clause | The Windows service |
 
 The fonts are listed in `render/fonts/README.md`.
 
@@ -203,7 +218,53 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
 | `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |
 | `palate-agent test-print -printer p-tandoor` | Prints a test slip (bold, accented letters, a Kannada line and the cut, so one print checks what a real printer can get wrong) and says whether the printer confirmed it |
-| `palate-agent run` | Polls and prints in the foreground until Ctrl-C, or until the credential is revoked |
+| `palate-agent run` | Polls and prints in the foreground until Ctrl-C (tickets in hand finish first), or until the credential is revoked |
+| `palate-agent install` | As administrator: installs the Windows service and starts it if the till is paired (see below) |
+| `palate-agent status` | Whether the service is installed and running, its account, and its last log lines; needs no administrator rights |
+| `palate-agent start` / `stop` | As administrator. Stop lets the tickets in hand finish (up to 10 s) |
+| `palate-agent uninstall` | As administrator: stops and removes the service and the program; keeps the data folder |
+
+### The Windows service
+
+`palate-agent install` (from a terminal opened with "Run as administrator"):
+
+- **Program:** copies itself to `C:\Program Files\PalatePrintAgent\palate-agent.exe`,
+  because a service account can't read a user's folders (Desktop, Downloads,
+  OneDrive). For the same reason the config, credential and ledger must not
+  be in a user's folder; install refuses if they are.
+- **Account:** `NT SERVICE\PalatePrintAgent`, a virtual account Windows makes
+  for this service alone: no password, few rights. `-account localsystem` is
+  the fallback for a USB printer the virtual account can't see.
+- **Data folder** (the config's folder, `C:\ProgramData\PalatePrintAgent` by
+  default): closed to everyone but SYSTEM, Administrators and the service.
+  The credential and ledger files carry their own access list with the same
+  accounts plus whoever ran `pair`. After install, run `pair` and
+  `test-print` as administrator.
+- **Starts** with Windows. **Restarts** after a crash or an error exit: after
+  5 s, then 30 s, then 60 s, with the count reset after a day.
+- **Stops cleanly:** polling stops at once; tickets already on the till get up
+  to 10 s to finish (Windows allows 20 s). Anything unfinished comes back
+  after its lease.
+- **Log:** `logs\agent.log` in the data folder, rotated at 5 MB, keeping three
+  old files. `palate-agent status` shows the last lines.
+
+Setting up a till:
+
+```bash
+palate-agent install -start=false
+```
+
+```bash
+palate-agent pair -code K7Q2-M9XD
+```
+
+```bash
+palate-agent test-print -printer p-tandoor
+```
+
+```bash
+palate-agent start
+```
 
 Config rules:
 
@@ -211,7 +272,7 @@ Config rules:
   with port 9100 by default. Hostnames and public IPs are refused. Loopback is
   also accepted, for the rig.
 - **USB printers:** named by their Windows printer name (`printer_name`),
-  never an address. The service runs as LocalSystem, which sees only
+  never an address. The service runs as its own account, which sees only
   printers installed for all users. `run` warns about any it can't see.
 - **Server:** must use https. Plain http is allowed only to a loopback address,
   for the mock.
@@ -288,6 +349,57 @@ Config rules:
    printing. If it comes back while the first report is still being retried,
    the stored outcome is reported again at once.
 
+### Documents: customer bills in HTML
+
+A job can carry a finished document instead of a kitchen slip. Palate owns
+the whole design; the agent prints it as it is, on the printer the job
+names, with the same ledger, backups, banners and outage recovery as a
+ticket.
+
+```json
+{"id": "job-2041", "printer_id": "p-bill", "created_at": "2026-11-18T14:12:00Z",
+ "document": {"type": "html", "html": "<!doctype html><html>...</html>"}}
+```
+
+A job carries a slip or a document, never both. `html` is the only type, up
+to 1 MiB; a poll response may be up to 4 MiB.
+
+How it prints:
+
+1. The agent parses the HTML and removes everything that could run code,
+   load something or move to another page: `<script>`, frames, `<object>`,
+   `<embed>`, `<base>`, `<link>`, every `<meta http-equiv>` (refresh
+   included) and every `on…` attribute. Its own Content-Security-Policy goes
+   first in `<head>`: no scripts, no network, no files; only inline CSS and
+   `data:` images and fonts.
+2. Headless Microsoft Edge (already on Windows 10 and 11) draws the page
+   576 dots wide for 80 mm paper or 384 for 58 mm, with a fresh throwaway
+   profile, no extensions, and a proxy that goes nowhere, so nothing can
+   leave the till even if the policy missed it. Edge listens on no port; it
+   is handed a file and writes a screenshot back.
+3. The picture is trimmed below its last ink, turned to black and white
+   (darker than mid-grey prints), and sent as raster bands of 256 rows,
+   after any banners (DUPLICATE, MOVED FROM, BACKUP FOR, DELAYED). Then the
+   paper is cut.
+
+What Palate's HTML should be:
+
+- **Self-contained:** CSS in `<style>`, images as `data:` URIs or inline
+  `<svg>`. Anything fetched from a URL is blocked and simply missing.
+- **No scripts.** They don't run.
+- **Sized for the paper:** 576 px wide for 80 mm, 384 px for 58 mm. Palate
+  knows each printer's width from `PUT /v1/printers`.
+- **Black on white**, with no page breaks: one long strip, up to 150 cm.
+  Grey prints as black or white; photos print poorly.
+- **Fonts:** Windows' own fonts cover Latin, Kannada, Hindi and Tamil
+  (Nirmala UI). Others can be embedded as `data:` fonts.
+
+`examples/bill-80mm.html` is a sample. Drawing takes about a second per
+document on this machine (Edge starts fresh each time); documents are drawn
+one at a time. `edge_path` in the config points at Edge if it isn't in its
+usual place; `html_work_dir` (default `html-work` beside the config) holds
+each document's scratch folder until it is printed.
+
 ### When something gets stuck
 
 - **The internet drops:** failed attempts are retried after 1, 2, 4, 8, then
@@ -328,12 +440,9 @@ Config rules:
   - Small tickets to a stalled network printer show as `written`, because
     socket buffers accept them. A big one shows as `partial`.
 - **M4:**
-  - The Windows service, the signed MSI and update verification. Today `run`
-    is a foreground command; Windows will restart a crashed service.
+  - Signed updates with rollback, and the signed installer.
   - Raster speed and legibility on real printers.
 - **Owner to confirm:**
-  - LocalSystem as the service account. It's assumed for now and nothing in
-    the code depends on it.
   - Reprinting as DUPLICATE (rather than reporting `failed`) after a crash
     mid-write.
   - The timings: lease 60 s, not answering 60 s, probe 30 s, poison job
@@ -431,7 +540,7 @@ What the mock already enforces:
 | Call | Body |
 | --- | --- |
 | `POST /mock/pairing-codes` | `{"restaurant_id":"demo"}` |
-| `POST /mock/jobs` | `{"restaurant_id":"demo","jobs":[{"printer_id":"p1","slip":{...}}]}` |
+| `POST /mock/jobs` | `{"restaurant_id":"demo","jobs":[{"printer_id":"p1","slip":{...}}]}`, or a document: `{"printer_id":"p1","document":{"type":"html","html":"..."}}` |
 | `GET /mock/state` | Shows devices, health, jobs, leases, outcomes and the active flags |
 | `PUT /mock/hostile` | `{"flags":["repeat-id"]}`; an empty list clears them |
 | `POST /mock/devices/{id}/revoke` | none |

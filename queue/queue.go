@@ -26,6 +26,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image"
 	"log/slog"
 	"strings"
 	"sync"
@@ -71,6 +72,15 @@ type Config struct {
 	Location       *time.Location // order times are printed in this zone; default time.Local
 	Now            func() time.Time
 	Log            *slog.Logger
+	// HTML draws document jobs (such as customer bills) as pictures. Nil
+	// means this till can't print documents: they are recorded as failed.
+	HTML HTMLRenderer
+}
+
+// HTMLRenderer draws an HTML document widthDots wide. htmlrender.Edge
+// satisfies it.
+type HTMLRenderer interface {
+	Render(ctx context.Context, doc string, widthDots int) (image.Image, error)
 }
 
 // CrashRecovery is the reason given when a job is printed again because the
@@ -314,6 +324,35 @@ const (
 	stepHandedOff                 // passed to the backup printer's queue
 )
 
+// render makes the printer bytes for a job: a kitchen ticket through
+// render.Render, or a document drawn by the HTML renderer and printed as a
+// picture. Banners the server set on the job are kept.
+func (q *Queue) render(ctx context.Context, j job.Job, bn render.Banners, width job.Width) ([]byte, error) {
+	if d := j.Document; d != nil {
+		if q.cfg.HTML == nil {
+			return nil, errors.New("this till can't print documents: no HTML renderer")
+		}
+		if d.Duplicate && !bn.Duplicate {
+			bn.Duplicate = true
+		}
+		bn.MovedFrom = d.MovedFrom
+		img, err := q.cfg.HTML.Render(ctx, d.HTML, render.PaperDots(width))
+		if err != nil {
+			return nil, err
+		}
+		return render.Picture(bn, img, width)
+	}
+	slip := j.Slip
+	slip.PlacedAt = slip.PlacedAt.In(q.cfg.Location)
+	slip.Delayed = bn.Delayed
+	slip.FallbackFrom = bn.FallbackFrom
+	if bn.Duplicate {
+		slip.Duplicate = true
+		slip.DuplicateReason = bn.DuplicateReason
+	}
+	return render.Render(slip, width)
+}
+
 // process takes one task through the ledger, the renderer and the printer.
 func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, nextStep) {
 	j, h := t.j, t.handoff
@@ -346,37 +385,38 @@ func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, ne
 		}
 	}
 
-	slip := j.Slip
-	slip.PlacedAt = slip.PlacedAt.In(q.cfg.Location)
+	// Banners are decided once, the same way for a kitchen ticket and a
+	// document such as a customer bill.
+	var bn render.Banners
 	if !j.CreatedAt.IsZero() && q.cfg.Now().Sub(j.CreatedAt) > q.cfg.DelayedAfter {
-		slip.Delayed = true
+		bn.Delayed = true
 	}
 	if recovering {
 		// The agent died while writing this job. It may or may not be on
 		// paper, so it prints again, marked so the kitchen can tell.
-		slip.Duplicate = true
-		slip.DuplicateReason = CrashRecovery
+		bn.Duplicate = true
+		bn.DuplicateReason = CrashRecovery
 		notes = append(notes, CrashRecovery)
 		q.cfg.Log.Warn("job was mid-write when the agent stopped; printing again as DUPLICATE", "job", j.ID)
 	}
 	if retry != nil && retry.Partial {
 		// The failed attempt may have put part of this ticket on paper.
-		slip.Duplicate = true
-		slip.DuplicateReason = RetryAfterPartial
+		bn.Duplicate = true
+		bn.DuplicateReason = RetryAfterPartial
 		notes = append(notes, RetryAfterPartial)
 	}
 	if retry != nil {
 		notes = append(notes, "retried after an earlier failure")
 	}
 	if h != nil {
-		slip.FallbackFrom = h.from.Name
+		bn.FallbackFrom = h.from.Name
 		if h.partial {
-			slip.Duplicate = true
-			slip.DuplicateReason = "partial ticket on " + strings.ToUpper(h.from.Name)
+			bn.Duplicate = true
+			bn.DuplicateReason = "partial ticket on " + strings.ToUpper(h.from.Name)
 		}
 	}
 
-	data, err := render.Render(slip, w.p.Width)
+	data, err := q.render(ctx, j, bn, w.p.Width)
 	if err != nil {
 		q.cfg.Log.Error("render failed", "job", j.ID, "printer", w.p.ID, "err", err)
 		o := job.Outcome{Kind: job.Failed, Reason: err.Error()}

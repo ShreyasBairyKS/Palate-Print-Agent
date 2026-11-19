@@ -237,15 +237,24 @@ func (s *Server) NewPairingCode(restaurant string) (string, time.Time) {
 
 // NewJob queues a job for a restaurant's printer and wakes waiting polls.
 func (s *Server) NewJob(restaurant, printerID string, slip api.Slip) string {
+	return s.queueJob(restaurant, api.Job{PrinterID: printerID, Slip: slip})
+}
+
+// NewDocument queues a finished HTML document, such as a customer bill, for
+// a restaurant's printer. The agent prints it as it is.
+func (s *Server) NewDocument(restaurant, printerID, html string) string {
+	return s.queueJob(restaurant, api.Job{PrinterID: printerID,
+		Document: &api.Document{Type: api.DocumentHTML, HTML: html}})
+}
+
+func (s *Server) queueJob(restaurant string, j api.Job) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.seq++
 	id := fmt.Sprintf("job-%06d", s.seq)
-	s.jobs[id] = &serverJob{
-		Job:        api.Job{ID: id, PrinterID: printerID, CreatedAt: time.Now().UTC(), Slip: slip},
-		Restaurant: restaurant,
-		State:      queued,
-	}
+	j.ID = id
+	j.CreatedAt = time.Now().UTC()
+	s.jobs[id] = &serverJob{Job: j, Restaurant: restaurant, State: queued}
 	s.jobOrder = append(s.jobOrder, id)
 	s.broadcastLocked()
 	return id
@@ -365,7 +374,11 @@ func (s *Server) moveFromSilentTillsLocked(now time.Time) bool {
 		j.MovedFrom = from
 		j.MovedFromTill = d.ID
 		j.Job.PrinterID = backup
-		j.Job.Slip.MovedFrom = names[from]
+		if j.Job.Document != nil {
+			j.Job.Document.MovedFrom = names[from]
+		} else {
+			j.Job.Slip.MovedFrom = names[from]
+		}
 		s.alerts = append(s.alerts, fmt.Sprintf("%s: till %s not answering; moved from %s to %s on %s", id, d.ID, from, backup, bd.ID))
 	}
 	return changed
@@ -734,8 +747,9 @@ func (s *Server) handleNewJobs(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RestaurantID string `json:"restaurant_id"`
 		Jobs         []struct {
-			PrinterID string   `json:"printer_id"`
-			Slip      api.Slip `json:"slip"`
+			PrinterID string        `json:"printer_id"`
+			Slip      api.Slip      `json:"slip"`
+			Document  *api.Document `json:"document"`
 		} `json:"jobs"`
 	}
 	if !decode(w, r, &req) {
@@ -747,6 +761,13 @@ func (s *Server) handleNewJobs(w http.ResponseWriter, r *http.Request) {
 	}
 	var ids []string
 	for _, j := range req.Jobs {
+		if j.Document != nil {
+			if j.Document.Type == "" {
+				j.Document.Type = api.DocumentHTML
+			}
+			ids = append(ids, s.queueJob(req.RestaurantID, api.Job{PrinterID: j.PrinterID, Document: j.Document}))
+			continue
+		}
 		if j.Slip.PlacedAt.IsZero() {
 			j.Slip.PlacedAt = time.Now().UTC()
 		}
@@ -887,7 +908,7 @@ func (s *Server) Snapshot() State {
 		j := s.jobs[id]
 		st.Jobs = append(st.Jobs, JobState{
 			ID: id, Restaurant: j.Restaurant, PrinterID: j.Job.PrinterID, State: string(j.State),
-			Order: j.Job.Slip.OrderNumber, Station: j.Job.Slip.Station, Table: j.Job.Slip.Table,
+			Order: j.Job.Slip.OrderNumber, Station: stationOf(j.Job), Table: j.Job.Slip.Table,
 			Items: len(j.Job.Slip.Items), CreatedAt: j.Job.CreatedAt,
 			LeasedTo: j.LeasedTo, Deliveries: j.Deliveries, Reports: j.Reports, Outcome: j.Outcome,
 			RecordedBy: j.RecordedBy, MovedFrom: j.MovedFrom, MovedTill: j.MovedFromTill, Late: j.LateOutcome,
@@ -947,4 +968,12 @@ func remoteIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// stationOf is what the state page shows in a job's station column.
+func stationOf(j api.Job) string {
+	if j.Document != nil {
+		return "Document (HTML)"
+	}
+	return j.Slip.Station
 }
