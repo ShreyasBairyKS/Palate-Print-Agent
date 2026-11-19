@@ -9,7 +9,7 @@ recovery when the internet drops.
 
 | File | What it is | For |
 | --- | --- | --- |
-| `palate-agent.exe` | **The print agent.** Double-click it on a till for guided setup; it installs as a Windows service. | Restaurants |
+| `palate-agent.exe` | **The print agent.** Double-click it on a till to open the setup window; it installs as a Windows service. | Restaurants |
 | `docs/TILL-SETUP.md` | How to install it on a till and its printers, step by step. | Whoever installs it |
 | `docs/SERVER-API.md` | **What Palate's server must provide:** the four endpoints, every field of a kitchen ticket and a bill, the delivery rules, errors, security, and the HTML bill format. | Palate's backend team |
 | `mockpalate.exe` | A mock Palate server that follows `SERVER-API.md` exactly: the reference implementation, and the server for the demo. | Reference and demo |
@@ -20,10 +20,10 @@ recovery when the internet drops.
 
 ## Install it on a till
 
-**Double-click `palate-agent.exe`** and answer the questions: Palate's server
-address, each printer (a test slip prints on each), and the pairing code. It
-asks for administrator rights, installs the Windows service, pairs and
-starts it. `docs/TILL-SETUP.md` has the details and the same steps as
+**Double-click `palate-agent.exe`.** After Windows asks for permission, a
+setup window opens: type Palate's server address, add each printer (a test
+slip prints on each), enter the pairing code, and press **Install and
+start**. It installs the Windows service, pairs and starts it. `docs/TILL-SETUP.md` has the details and the same steps as
 individual commands.
 
 ## See it working (5 minutes, no installation)

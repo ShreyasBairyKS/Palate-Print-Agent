@@ -23,23 +23,28 @@ printers. It takes about 15 minutes per till.
 
 1. Unblock and extract the zip (step 1 below).
 2. **Double-click `palate-agent.exe`.** Windows asks to allow it to make
-   changes: choose **Yes**.
-3. Answer the questions in the window that opens:
-   - **Palate's server address** (`https://…`).
-   - **Each printer:** its name (Tandoor, Pass, Bill…), an id (press Enter to
-     accept the suggested one), its IP address or the number of a USB
-     printer from the list shown, and its paper width. A **test slip
-     prints** on each; if it fails, you can retry, skip the test, or fix the
-     details.
-   - **Backups (optional):** a printer to use when another is down.
-   - **The pairing code** from the Palate portal ("Add a till"), or press
-     Enter to pair later.
-4. Setup installs the service, pairs and starts it, then says **Done**.
-   Press Enter to close the window.
+   changes: choose **Yes**. The **Palate print agent setup** window opens.
+3. Fill it in, top to bottom:
+   - **1 · Palate's server address** (`https://…`).
+   - **2 · Printers:** press **Add printer…** for each one. Give its name
+     (Tandoor, Pass, Bill…); the id fills itself in. Choose **Network
+     printer** and type its IP address, or **USB printer** and pick it from
+     the list (Windows' PDF, XPS, OneNote and fax "printers" are left out).
+     Pick the paper width and, optionally, a backup printer. A **test slip
+     prints** as soon as you add it; the list shows ✓ or ✗. **Edit…**,
+     **Remove** and **Test print** work on the selected printer.
+   - **3 · Pairing code** from the Palate portal ("Add a till"). You can
+     leave it empty and pair later.
+4. Press **Install and start**. The **Progress** box shows each step:
+   saving, installing the service, pairing, starting. When it says
+   **Running**, close the window.
 
-Double-clicking again later shows the agent's status instead of setting it
-up twice. The steps below do the same thing one command at a time, for
-scripted installs or when something needs fixing.
+Double-clicking again later opens the same window on the installed agent:
+its printers can be tested or changed there (each change is test-printed,
+saved and applied by restarting the service), and an agent that isn't
+paired yet can be paired. The steps below do the same thing one command at
+a time, for scripted installs or when something needs fixing; `palate-agent
+setup` asks the same questions in the console.
 
 ## 1. Unpack and unblock
 
@@ -58,8 +63,8 @@ If Windows Defender SmartScreen says "Windows protected your PC" when you
 run it, choose **More info → Run anyway**. (The signed release won't need
 this.)
 
-`palate-agent.exe` is a command-line program: run in PowerShell with a
-command, it does that one thing; double-clicked, it runs the guided setup
+`palate-agent.exe` is also a command-line program: run in PowerShell with a
+command, it does that one thing; double-clicked, it opens the setup window
 above.
 
 ## 2. Find the printers

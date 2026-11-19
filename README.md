@@ -219,7 +219,8 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 
 | Command | What it does |
 | --- | --- |
-| `palate-agent setup` (or double-click `palate-agent.exe`) | Guided setup as administrator: server, printers (each test-printed), service, pairing, start. On an installed PC it shows the status |
+| Double-click `palate-agent.exe` | Opens the setup window (asks for administrator rights): server, printers (each test-printed), pairing code, Install and start. On an installed PC it opens on the installed printers |
+| `palate-agent setup` | The same steps as questions in the console; `-gui` opens the window instead |
 | `palate-agent init p-tandoor -server https://… -name Tandoor -address 192.168.1.50` | Creates the config with its first printer, test-printed; refuses if one exists |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
 | `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |

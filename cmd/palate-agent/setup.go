@@ -46,9 +46,14 @@ type setupEnv struct {
 func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	path := fs.String("config", defaultConfigPath(), "path to agent.json")
-	pause := fs.Bool("pause", doubleClicked, "wait for Enter before closing")
+	pause := fs.Bool("pause", false, "console setup: wait for Enter before closing")
+	window := fs.Bool("gui", doubleClicked && guiAvailable(), "show the setup window instead of asking in the console")
+	noElevate := fs.Bool("no-elevate", false, "don't ask for administrator rights (to look at the window; installing then fails)")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if doubleClicked && !*window {
+		*pause = true
 	}
 	in := bufio.NewReader(os.Stdin)
 	finish := func(err error) error {
@@ -65,10 +70,16 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		return err
 	}
 
-	if !service.IsElevated() {
+	if !service.IsElevated() && !*noElevate {
 		fmt.Println("Palate print agent setup needs administrator rights.")
 		fmt.Println("Windows will ask you to allow it; setup continues in a new window.")
-		if err := relaunchElevated([]string{"setup", "-pause", "-config", *path}); err != nil {
+		again := []string{"setup", "-config", *path}
+		if *window {
+			again = append(again, "-gui")
+		} else {
+			again = append(again, "-pause")
+		}
+		if err := relaunchElevated(again); err != nil {
 			return finish(fmt.Errorf("couldn't get administrator rights (%v). Right-click palate-agent.exe and choose \"Run as administrator\"", err))
 		}
 		return nil
@@ -83,6 +94,14 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		testPrint: testPrint,
 		usbList:   usbprinter.List,
 		edgeFind:  (&htmlrender.Edge{}).Find,
+	}
+	if *window {
+		if err := runGUI(env, startedByDoubleClick()); err != nil {
+			// No window possible: fall back to asking in the console.
+			fmt.Println("The setup window couldn't open (" + err.Error() + "); continuing here.")
+			return finish(runSetup(env))
+		}
+		return nil
 	}
 	return finish(runSetup(env))
 }
@@ -207,7 +226,8 @@ func (e *setupEnv) buildConfig() (*config.Config, error) {
 	raw := &config.Config{Server: server}
 
 	e.say("\nStep 2 of 5: the printers.")
-	usb, _ := e.usbList()
+	all, _ := e.usbList()
+	usb := realPrinters(all)
 	if len(usb) > 0 {
 		e.say("USB printers Windows can see:")
 		for i, n := range usb {
@@ -278,10 +298,7 @@ func (e *setupEnv) askPrinter(raw *config.Config, usb []string) (config.Printer,
 		e.say("  A name is needed.")
 		return config.Printer{}, false
 	}
-	suggested := "p-" + strings.Trim(nonID.ReplaceAllString(strings.ToLower(name), "-"), "-")
-	if !validID.MatchString(suggested) {
-		suggested = fmt.Sprintf("p-%d", len(raw.Printers)+1)
-	}
+	suggested := suggestID(name, len(raw.Printers)+1)
 	id := e.ask(fmt.Sprintf("Its id, which Palate uses and never changes [%s]: ", suggested))
 	if id == "" {
 		id = suggested
