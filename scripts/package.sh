@@ -8,7 +8,7 @@
 #   mockpalate.exe     the reference server, for the demo and for Palate
 #   fakeprinter.exe    the demo's on-screen printers
 #   start-demo.ps1     the demo, for Windows without Git Bash or Go
-#   README-FIRST.md, docs/SERVER-API.md, docs/TILL-SETUP.md, examples/
+#   HOW-TO-USE.txt, README-FIRST.md, docs/SERVER-API.md, docs/TILL-SETUP.md, examples/
 #   SHA256SUMS.txt
 #
 # Needs bash, Go and PowerShell (for the zip).
@@ -27,11 +27,11 @@ for cmd in palate-agent mockpalate fakeprinter; do
     go build -trimpath -ldflags "-s -w" -o "$out/$cmd.exe" "./cmd/$cmd"
 done
 
-cp package/README-FIRST.md package/start-demo.ps1 "$out/"
+cp package/HOW-TO-USE.txt package/README-FIRST.md package/start-demo.ps1 "$out/"
 cp docs/SERVER-API.md docs/TILL-SETUP.md "$out/docs/"
 cp examples/bill.html examples/bill-80mm-printed.png examples/bill-58mm-printed.png "$out/examples/"
 # Windows tools read these better with CRLF line endings.
-for f in "$out/README-FIRST.md" "$out/start-demo.ps1" "$out/docs/"*.md "$out/examples/bill.html"; do
+for f in "$out/HOW-TO-USE.txt" "$out/README-FIRST.md" "$out/start-demo.ps1" "$out/docs/"*.md "$out/examples/bill.html"; do
   sed -i 's/\r*$/\r/' "$f"
 done
 (cd "$out" && sha256sum palate-agent.exe mockpalate.exe fakeprinter.exe > SHA256SUMS.txt)

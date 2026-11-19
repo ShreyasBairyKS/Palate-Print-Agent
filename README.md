@@ -104,6 +104,7 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `printer/` | wire | The `Writer` interface and failure kinds (refused, hang, partial, paper out) |
 | `printer/net/` | wire | Raw TCP 9100 writer with a DLE EOT status check |
 | `printer/usb/` | wire | Windows spooler writer, datatype RAW |
+| `printer/discover/` | | Finds receipt printers for setup: this PC's private /24 networks on port 9100, Windows' TCP/IP printer ports, and an ESC/POS status query to tell receipt printers from other devices. Only on request; the service never scans |
 | `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, failure ladder to the backup, probing down printers, report |
 | `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
@@ -224,6 +225,7 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 | `palate-agent init p-tandoor -server https://… -name Tandoor -address 192.168.1.50` | Creates the config with its first printer, test-printed; refuses if one exists |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
 | `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |
+| `palate-agent printer find [-identify]` | Looks for receipt printers on this PC's network (its own /24, port 9100) and in Windows' network printer ports; `-identify` makes each print its own address. No administrator rights needed |
 | `palate-agent printer list` / `set` / `add` / `remove` | As administrator: changes this till's printers without editing the file or contacting Palate (see below) |
 | `palate-agent test-print -printer p-tandoor` | Prints a test slip (bold, accented letters, a Kannada line and the cut, so one print checks what a real printer can get wrong) and says whether the printer confirmed it |
 | `palate-agent run` | Polls and prints in the foreground until Ctrl-C (tickets in hand finish first), or until the credential is revoked |
@@ -338,6 +340,13 @@ Config rules:
 - **Printer addresses:** IP literals only, in 10/8, 172.16/12 or 192.168/16,
   with port 9100 by default. Hostnames and public IPs are refused. Loopback is
   also accepted, for the rig.
+- **Finding printers:** setup (the window, the console, `printer find`)
+  searches only when someone runs it, and only this PC's own private
+  networks, each narrowed to its /24, on port 9100, plus Windows' known
+  printer ports and this PC's own port 9100. Each device that answers on
+  9100 is sent the three-byte ESC/POS status query DLE EOT 1, which receipt
+  printers answer without printing. The running service never scans; once a
+  printer is added, its address is fixed in the config.
 - **USB printers:** named by their Windows printer name (`printer_name`),
   never an address. The service runs as its own account, which sees only
   printers installed for all users. `run` warns about any it can't see.

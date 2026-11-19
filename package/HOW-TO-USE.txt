@@ -1,0 +1,160 @@
+PALATE PRINT AGENT - HOW TO USE THIS ZIP
+========================================
+
+The print agent runs on a restaurant's Windows till. It collects kitchen
+tickets and customer bills from Palate's server and prints each one on the
+right printer.
+
+This zip is for three things. Do step 0 first, then pick A, B or C.
+
+  A. Install the agent on a real till              (restaurants, installers)
+  B. Show a demo on one PC, nothing installed       (about 5 minutes)
+  C. Build Palate's server side                     (Palate's backend team)
+
+
+0. BEFORE ANYTHING ELSE: UNBLOCK AND EXTRACT
+--------------------------------------------
+
+1. Right-click the zip -> Properties -> tick "Unblock" -> OK.
+   (Windows marks downloaded files; unblocking stops it warning about every
+   program inside.)
+2. Right-click the zip -> Extract All... -> choose a folder, for example
+   C:\PalatePrintAgent-setup -> Extract.
+3. Work from the extracted folder, never from inside the zip.
+
+The programs are not code-signed yet. If Windows says "Windows protected
+your PC", choose "More info" -> "Run anyway".
+
+Needs: Windows 10 or 11, 64-bit, with Microsoft Edge (every Windows 10 and
+11 has it; it draws the customer bills).
+
+
+A. INSTALL THE AGENT ON A REAL TILL
+-----------------------------------
+
+You need:
+  - Palate's server address (starts with https://)
+  - a pairing code from the Palate portal ("Add a till"). Codes expire after
+    10 minutes, so get it just before step 5.
+  - the printers switched on: network printers cabled to the same network
+    as the till, USB printers installed in Windows for all users.
+
+1. Double-click palate-agent.exe.
+2. Windows asks "Do you want to allow this app to make changes?" -> Yes.
+   The "Palate print agent setup" window opens.
+3. Type Palate's server address in box 1.
+4. Printers (box 2). The window looks for network printers by itself as it
+   opens; the Progress box at the bottom says what it found.
+     - Press "Find printers...". Not sure which printer is which? Press
+       "Print address slips": each printer prints its own address.
+     - Pick one, press "Add selected...", type the name the kitchen uses
+       for it (Tandoor, Pass, Bill...), choose the paper width, press Add.
+     - A test slip prints at once. The list shows a tick if it worked.
+     - Repeat for every printer. A printer that wasn't found: press
+       "Add printer..." and type its IP address, or pick a USB printer.
+5. Type the pairing code in box 3.
+6. Press "Install and start". When Progress says "Running", close the
+   window. The agent now starts with Windows by itself.
+
+Later changes (a new printer, a printer moved): double-click
+palate-agent.exe again. The same window opens on the installed agent.
+
+Give every network printer a fixed IP address (on the printer, or a "DHCP
+reservation" on the router), so it keeps the same address after a restart.
+
+Full guide, with the same steps as single commands and a list of fixes:
+docs\TILL-SETUP.md (open it with Notepad).
+
+
+B. SHOW A DEMO ON ONE PC (NOTHING INSTALLED)
+--------------------------------------------
+
+1. Open the extracted folder in File Explorer.
+2. Click in the address bar, type  powershell  and press Enter. A blue
+   PowerShell window opens in this folder.
+3. Paste this line and press Enter:
+
+     powershell -ExecutionPolicy Bypass -File .\start-demo.ps1
+
+4. The browser opens the demo page: two tills, three printers on screen.
+   Try:
+     - "Confirm order": the order is split by station; each printer shows
+       its ticket.
+     - "Send a bill": the sample HTML bill prints, fitted to the paper.
+     - Switch a printer off: its tickets go to its backup printer.
+     - Cut a till's network: its tickets move to the other till.
+     - Server mode: make the server misbehave on purpose; nothing wrong
+       reaches the paper.
+5. To stop: go back to the PowerShell window and press Enter.
+
+To print on a real printer as well, add its address to the line in step 3:
+
+     powershell -ExecutionPolicy Bypass -File .\start-demo.ps1 -RealPrinter 192.168.1.50
+
+(For a USB printer use  -RealUsbPrinter "EPSON TM-T82 Receipt"  instead,
+and add  -RealWidth 58  for 58 mm paper.)
+
+Showing the real setup window too (this DOES install the agent on the PC):
+
+1. Open two PowerShell windows in the folder, as in steps 1-2 above.
+2. In the first, start the mock Palate server with a pairing code:
+     .\mockpalate.exe -seed demo
+   It prints a line "pairing code for restaurant "demo": XXXX-XXXX".
+3. In the second, start an on-screen printer:
+     .\fakeprinter.exe -dump
+4. Double-click palate-agent.exe and follow part A, with:
+     - server address:  http://127.0.0.1:8080
+     - "Find printers..." finds the fake printer as "127.0.0.1 (this PC)"
+     - the pairing code from step 2 (restart mockpalate for a new one
+       after 10 minutes)
+5. Open http://127.0.0.1:8080 in the browser, pick your printer in the
+   order or bill, and confirm it: the second PowerShell window shows each
+   ticket the fake printer received, decoded.
+6. Afterwards, remove it again: open PowerShell as administrator in the
+   folder and run
+     .\palate-agent.exe uninstall
+
+
+C. BUILD PALATE'S SERVER SIDE
+-----------------------------
+
+- docs\SERVER-API.md is the contract: the four endpoints the agent calls,
+  every field of a kitchen ticket and a customer bill, the delivery rules,
+  errors and security.
+- mockpalate.exe follows that document exactly. Run it, call its
+  endpoints, and watch http://127.0.0.1:8080/mock/state to see what a real
+  server has to do.
+- examples\bill.html is a sample customer bill that fits 80 mm and 58 mm
+  paper; the two .png files beside it show how it printed.
+
+
+WHAT EACH FILE IS
+-----------------
+
+  palate-agent.exe     THE PRINT AGENT. The only file a restaurant needs.
+  mockpalate.exe       A stand-in Palate server, for the demo and as a
+                       reference for Palate's developers.
+  fakeprinter.exe      An on-screen printer, for the demo.
+  start-demo.ps1       Starts the whole demo with one command (part B).
+  README-FIRST.md      A longer introduction (open with Notepad).
+  docs\TILL-SETUP.md   The full installation guide.
+  docs\SERVER-API.md   What Palate's server must provide.
+  examples\            A sample HTML bill and pictures of it printed.
+  SHA256SUMS.txt       Checksums, to check the programs weren't altered.
+
+
+IF SOMETHING GOES WRONG
+-----------------------
+
+- Double-clicking palate-agent.exe does nothing, or the window closes at
+  once: make sure you extracted the zip (step 0) and chose Yes when Windows
+  asked for permission.
+- A test print fails: check the printer is on, has paper, and is on the
+  same network as the till; then press "Test print" again.
+- No printers found: the printer may be on another network, or switched
+  off. Print its self-test page (on most receipt printers, hold the FEED
+  button while switching it on) to see its IP address, and add it with
+  "Add printer...".
+- Pairing fails: the code may have expired (10 minutes). Get a new one
+  from the Palate portal.
+- Anything else: docs\TILL-SETUP.md, section "If something's wrong".

@@ -9,9 +9,11 @@ printers. It takes about 15 minutes per till.
   10 and 11 has it; it draws customer bills). An administrator account.
 - **Printers:** ESC/POS thermal printers (Epson TM, and most 58 mm and 80 mm
   kitchen printers).
-  - **Network printers:** connected to the restaurant network, port 9100,
-    with a **fixed IP address** (set on the printer, or reserved on the
-    router). Print the printer's self-test page to see its address.
+  - **Network printers:** connected to the same network as the till,
+    port 9100, with a **fixed IP address** (set on the printer, or reserved
+    on the router), so it doesn't change after a restart. Setup finds them
+    by itself; if it can't, print the printer's self-test page to see its
+    address.
   - **USB printers:** installed in Windows **for all users** (Settings →
     Bluetooth & devices → Printers & scanners), so the service can see
     them.
@@ -26,13 +28,19 @@ printers. It takes about 15 minutes per till.
    changes: choose **Yes**. The **Palate print agent setup** window opens.
 3. Fill it in, top to bottom:
    - **1 · Palate's server address** (`https://…`).
-   - **2 · Printers:** press **Add printer…** for each one. Give its name
-     (Tandoor, Pass, Bill…); the id fills itself in. Choose **Network
-     printer** and type its IP address, or **USB printer** and pick it from
-     the list (Windows' PDF, XPS, OneNote and fax "printers" are left out).
-     Pick the paper width and, optionally, a backup printer. A **test slip
-     prints** as soon as you add it; the list shows ✓ or ✗. **Edit…**,
-     **Remove** and **Test print** work on the selected printer.
+   - **2 · Printers:** when the window opens it looks for receipt
+     printers on the till's network by itself (a few seconds) and says what
+     it found in **Progress**. Press **Find printers…** to see them. If you
+     can't tell which is which, press **Print address slips**: each printer
+     prints its own address. Choose one and press **Add selected…**; its
+     address is filled in. Give it the name the kitchen uses (Tandoor,
+     Pass, Bill…); the id fills itself in. A printer the search didn't find
+     can be added with **Add printer…**: choose **Network printer** and type
+     its IP address, or **USB printer** and pick it from the list (Windows'
+     PDF, XPS, OneNote and fax "printers" are left out). Pick the paper
+     width and, optionally, a backup printer. A **test slip prints** as soon
+     as you add a printer; the list shows ✓ or ✗. **Edit…**, **Remove** and
+     **Test print** work on the selected printer.
    - **3 · Pairing code** from the Palate portal ("Add a till"). You can
      leave it empty and pair later.
 4. Press **Install and start**. The **Progress** box shows each step:
@@ -74,7 +82,14 @@ above.
 ```
 
 lists the USB printers Windows can see, by the exact names to use below.
-Network printers need their IP address.
+
+```powershell
+.\palate-agent.exe printer find
+```
+
+looks for network receipt printers on the till's network and lists their
+addresses. Add `-identify` to make each one print its own address, so you
+can tell which printer is which.
 
 ## 3. Create the config with the first printer
 

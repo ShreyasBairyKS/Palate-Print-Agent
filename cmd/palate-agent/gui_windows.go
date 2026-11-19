@@ -22,6 +22,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/agent"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer/discover"
 )
 
 var (
@@ -115,6 +116,12 @@ const (
 	idOK
 	idCancel
 	idDlgError
+	idFind
+	idFindList
+	idFindAgain
+	idFindSlips
+	idFindAdd
+	idFindClose
 )
 
 type wndClassEx struct {
@@ -207,7 +214,16 @@ type gui struct {
 	title      uintptr
 	hinst      uintptr
 
-	main, server, list, add, edit, remove, test, code, codeLabel, install, status, subtitle uintptr
+	main, server, list, add, edit, remove, test, find, code, codeLabel, install, status, subtitle uintptr
+
+	// Finding network printers, and the Find printers dialog while it's open.
+	searching, searched, identifying bool
+	found                            []discover.Found
+	nets                             []discover.Network
+	findErr                          error
+	prefill                          *discover.Found // a found printer the printer dialog opens with
+	fdlg, fStatus, fList             uintptr
+	fAgain, fSlips, fAdd             uintptr
 
 	// The printer dialog, while it's open.
 	dlg, dName, dID, dNet, dIP, dUSB, dUSBList, dWidth, dBackup, dError uintptr
@@ -276,7 +292,7 @@ func runGUI(e *setupEnv, ownConsole bool) error {
 	for _, c := range []struct {
 		name string
 		proc func(hwnd, m, w, l uintptr) uintptr
-	}{{"PalateSetup", g.mainProc}, {"PalatePrinter", g.dlgProc}} {
+	}{{"PalateSetup", g.mainProc}, {"PalatePrinter", g.dlgProc}, {"PalateFind", g.findProc}} {
 		wc := wndClassEx{lpfnWndProc: windows.NewCallback(c.proc), hInstance: h, hIcon: icon, hIconSm: icon,
 			hCursor: cursor, hbrBackground: bg, lpszClassName: wstr(c.name)}
 		wc.cbSize = uint32(unsafe.Sizeof(wc))
@@ -305,6 +321,11 @@ func runGUI(e *setupEnv, ownConsole bool) error {
 		}
 		if g.dlg != 0 {
 			if r, _, _ := pIsDialogMessage.Call(g.dlg, uintptr(unsafe.Pointer(&m))); r != 0 {
+				continue
+			}
+		}
+		if g.fdlg != 0 {
+			if r, _, _ := pIsDialogMessage.Call(g.fdlg, uintptr(unsafe.Pointer(&m))); r != 0 {
 				continue
 			}
 		}
@@ -447,6 +468,7 @@ func (g *gui) build() {
 	g.edit = g.button(m, "Edit...", idEdit, 150, 330, 90, false)
 	g.remove = g.button(m, "Remove", idRemove, 246, 330, 90, false)
 	g.test = g.button(m, "Test print", idTest, 342, 330, 100, false)
+	g.find = g.button(m, "Find printers...", idFind, 448, 330, 128, false)
 
 	g.codeLabel = g.label(m, "3   Pairing code from the Palate portal (\"Add a till\")", 24, 378, 552, 20, g.bold)
 	g.code = g.editBox(m, idCode, 24, 400, 200, "K7Q2-M9XD", esUppercase)
@@ -474,10 +496,13 @@ func (g *gui) build() {
 			g.say("Note: Microsoft Edge wasn't found, so customer bills can't print until it's installed.")
 		}
 		if len(g.usb) == 0 {
-			g.say("No USB receipt printers found; add network printers by their IP address.")
+			g.say("No USB receipt printers found.")
 		}
 	}
 	g.refreshList()
+	if !g.installed && len(g.printers) == 0 {
+		g.autoSearch()
+	}
 	if g.raw.Server == "" {
 		pSetFocus.Call(g.server)
 	}
@@ -539,6 +564,7 @@ func (g *gui) setBusy(b bool) {
 	g.busy = b
 	has := g.selected() >= 0
 	enable(g.add, !b)
+	enable(g.find, !b)
 	enable(g.edit, !b && has)
 	enable(g.remove, !b && has)
 	enable(g.test, !b && has)
@@ -556,6 +582,8 @@ func (g *gui) mainProc(hwnd, m, w, l uintptr) uintptr {
 		switch {
 		case id == idAdd:
 			g.openPrinter(-1)
+		case id == idFind:
+			g.openFind()
 		case id == idEdit || (id == idPrinters && code == lbnDblClk):
 			if i := g.selected(); i >= 0 && !g.busy {
 				g.openPrinter(i)
@@ -813,12 +841,17 @@ func (g *gui) pairAndStart() {
 // The printer dialog
 
 func (g *gui) openPrinter(i int) {
-	if g.dlg != 0 || g.busy {
+	if g.dlg != 0 || g.fdlg != 0 || g.busy {
 		return
 	}
 	title, ok := "Add a printer", "Add"
 	var p config.Printer
 	g.dEditing = ""
+	if i < 0 && g.prefill != nil {
+		p.Kind, p.Address = "network", g.prefill.Addr
+		title = "Add the printer at " + shortAddr(g.prefill.Addr)
+		g.prefill = nil
+	}
 	if i >= 0 {
 		p = g.printers[i].p
 		g.dEditing = p.ID

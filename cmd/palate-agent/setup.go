@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/htmlrender"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer/discover"
 	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
 )
@@ -41,6 +43,10 @@ type setupEnv struct {
 	testPrint func(p config.Printer, t config.Timings) error
 	usbList   func() ([]string, error)
 	edgeFind  func() (string, error)
+	// find looks for network printers; identify prints a found printer's
+	// address on it. Either may be nil (no search).
+	find     func(ctx context.Context) ([]discover.Found, []discover.Network, error)
+	identify func(addr string) error
 }
 
 func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
@@ -94,6 +100,8 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		testPrint: testPrint,
 		usbList:   usbprinter.List,
 		edgeFind:  (&htmlrender.Edge{}).Find,
+		find:      findPrinters,
+		identify:  identifyPrinter,
 	}
 	if *window {
 		if err := runGUI(env, startedByDoubleClick()); err != nil {
@@ -226,18 +234,19 @@ func (e *setupEnv) buildConfig() (*config.Config, error) {
 	raw := &config.Config{Server: server}
 
 	e.say("\nStep 2 of 5: the printers.")
-	all, _ := e.usbList()
-	usb := realPrinters(all)
-	if len(usb) > 0 {
-		e.say("USB printers Windows can see:")
-		for i, n := range usb {
-			e.say("  %d. %s", i+1, n)
+	choices := e.printerChoices(raw)
+	if len(choices) > 0 {
+		e.say("Printers this PC can see:")
+		for i, c := range choices {
+			e.say("  %d. %s", i+1, c.label)
 		}
+	} else {
+		e.say("No printers found by themselves.")
 	}
-	e.say("A network printer needs its IP address (print its self-test page to find it).")
+	e.say("Not in the list? A network printer can be added by its IP address (print its self-test page to find it).")
 
 	for {
-		p, ok := e.askPrinter(raw, usb)
+		p, ok := e.askPrinter(raw, choices)
 		if !ok {
 			continue
 		}
@@ -290,8 +299,48 @@ func (e *setupEnv) buildConfig() (*config.Config, error) {
 
 var nonID = regexp.MustCompile(`[^a-z0-9]+`)
 
+// choice is one printer setup found by itself, offered by number.
+type choice struct {
+	label string
+	usb   bool
+	where string // Windows printer name (USB) or ip:port (network)
+}
+
+// printerChoices lists the USB printers Windows has and the network printers
+// a search finds, and offers to print each network printer's address on it.
+func (e *setupEnv) printerChoices(raw *config.Config) []choice {
+	var out []choice
+	all, _ := e.usbList()
+	for _, n := range realPrinters(all) {
+		out = append(out, choice{label: n + " (USB)", usb: true, where: n})
+	}
+	if e.find == nil {
+		return out
+	}
+	e.say("Looking for network printers on this PC's network (a few seconds)...")
+	found, nets, _ := e.find(context.Background())
+	e.say("  searched %s", networksLabel(nets))
+	var answering []string
+	for _, f := range found {
+		out = append(out, choice{label: foundLabel(f, raw), where: f.Addr})
+		if f.Answers {
+			answering = append(answering, f.Addr)
+		}
+	}
+	if len(answering) > 1 && e.identify != nil && e.yes(fmt.Sprintf("  Found %d receipt printers. Print each one's address on it, to tell them apart? [Y/n] ", len(answering)), true) {
+		for _, a := range answering {
+			if err := e.identify(a); err != nil {
+				e.say("  couldn't print on %v", err)
+			} else {
+				e.say("  printed its address on %s", shortAddr(a))
+			}
+		}
+	}
+	return out
+}
+
 // askPrinter asks for one printer's name, id, where it is and its width.
-func (e *setupEnv) askPrinter(raw *config.Config, usb []string) (config.Printer, bool) {
+func (e *setupEnv) askPrinter(raw *config.Config, choices []choice) (config.Printer, bool) {
 	e.say("")
 	name := e.ask("Printer name, as the kitchen calls it (e.g. Tandoor, Pass, Bill): ")
 	if name == "" {
@@ -313,12 +362,17 @@ func (e *setupEnv) askPrinter(raw *config.Config, usb []string) (config.Printer,
 	}
 	p := config.Printer{ID: id, Name: name}
 	prompt := "Its IP address: "
-	if len(usb) > 0 {
-		prompt = "Its IP address, or the number of a USB printer above: "
+	if len(choices) > 0 {
+		prompt = "Its number in the list above, or its IP address: "
 	}
 	where := e.ask(prompt)
-	if n, err := strconv.Atoi(where); err == nil && n >= 1 && n <= len(usb) {
-		p.Kind, p.PrinterName = "usb", usb[n-1]
+	if n, err := strconv.Atoi(where); err == nil && n >= 1 && n <= len(choices) {
+		c := choices[n-1]
+		if c.usb {
+			p.Kind, p.PrinterName = "usb", c.where
+		} else {
+			p.Kind, p.Address = "network", c.where
+		}
 	} else {
 		p.Kind, p.Address = "network", where
 	}

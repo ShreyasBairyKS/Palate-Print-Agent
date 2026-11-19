@@ -54,7 +54,7 @@ commands:
   init        create the config with its first printer (test-printed): init <id> -server URL -name NAME -address IP | -usb NAME [-width 58|80]
   pair        redeem a pairing code from the portal and register printers
   test-print  print a test slip on one printer
-  printer     list or change this till's printers: printer list | set | add | remove
+  printer     list, find or change this till's printers: printer list | find | set | add | remove
   run         poll for jobs and print them (foreground)
   install     install the Windows service and start it (as administrator)
   status      show whether the service is running, with recent log lines

@@ -32,9 +32,10 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
 )
 
-const printerUsage = `usage: palate-agent printer <list|set|add|remove> [id] [flags]
+const printerUsage = `usage: palate-agent printer <list|find|set|add|remove> [id] [flags]
 
   printer list
+  printer find [-identify]     look for receipt printers on this PC's network
   printer set <id> [-address IP[:port] | -usb "Windows printer name"] [-width 58|80] [-name NAME] [-backup ID|none]
   printer add <id> -name NAME (-address IP[:port] | -usb "Windows printer name") [-width 58|80] [-backup ID]
   printer remove <id>
@@ -62,6 +63,8 @@ func cmdPrinter(args []string) error {
 	switch args[0] {
 	case "list":
 		return printerList(args[1:])
+	case "find":
+		return printerFind(args[1:])
 	case "set":
 		return printerChange("set", args[1:])
 	case "add":
