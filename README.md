@@ -123,6 +123,10 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `scripts/demo-protocol.sh` | | M0 walkthrough of the protocol with curl |
 | `scripts/service-smoke.sh` | | As administrator: installs the real service against the mock, checks printing, stop/start, restart after a kill and the folder's access, then removes it all |
 | `scripts/build-release.sh` | | The release build for a till, with size and SHA-256 |
+| `scripts/package.sh` | | **The package handed out:** `dist/palate-print-agent-<version>.zip` with the agent, the mock server, the demo and the docs below |
+| `package/` | | The package's `README-FIRST.md` and `start-demo.ps1` (the live demo for Windows without Git Bash or Go) |
+| `docs/SERVER-API.md` | | **What Palate's server must provide:** endpoints, fields, delivery rules, errors, security, the HTML bill format |
+| `docs/TILL-SETUP.md` | | Installing the agent on a till and its printers, step by step |
 | `examples/bill.html` | | A sample customer bill in HTML that fits both 80 mm and 58 mm paper; `bill-80mm-printed.png` and `bill-58mm-printed.png` are how it printed |
 
 ## Build and test
@@ -215,6 +219,7 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 
 | Command | What it does |
 | --- | --- |
+| `palate-agent init p-tandoor -server https://… -name Tandoor -address 192.168.1.50` | Creates the config with its first printer, test-printed; refuses if one exists |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
 | `palate-agent pair -code K7Q2-M9XD` | Redeems the code, stores the credential (DPAPI) beside the config, registers the printers |
 | `palate-agent printer list` / `set` / `add` / `remove` | As administrator: changes this till's printers without editing the file or contacting Palate (see below) |

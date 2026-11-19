@@ -1,0 +1,173 @@
+# Setting up the print agent on a till
+
+For the person installing the agent on a restaurant's Windows till and its
+printers. It takes about 15 minutes per till.
+
+## What you need
+
+- **The till:** Windows 10 or 11, 64-bit, with Microsoft Edge (every Windows
+  10 and 11 has it; it draws customer bills). An administrator account.
+- **Printers:** ESC/POS thermal printers (Epson TM, and most 58 mm and 80 mm
+  kitchen printers).
+  - **Network printers:** connected to the restaurant network, port 9100,
+    with a **fixed IP address** (set on the printer, or reserved on the
+    router). Print the printer's self-test page to see its address.
+  - **USB printers:** installed in Windows **for all users** (Settings →
+    Bluetooth & devices → Printers & scanners), so the service can see
+    them.
+- **Palate's server address** (`https://…`) and a **pairing code** from the
+  Palate portal ("Add a till"). Codes expire after 10 minutes, so get it
+  when you reach step 5.
+
+## 1. Unpack and unblock
+
+The program isn't code-signed yet, so Windows may warn about it.
+
+1. Right-click the zip → **Properties** → tick **Unblock** → OK. Then extract
+   it, for example to `C:\PalatePrintAgent-setup`.
+2. Open **PowerShell as administrator** (Start → type PowerShell →
+   right-click → Run as administrator) and go to the folder:
+
+```powershell
+cd C:\PalatePrintAgent-setup
+```
+
+If Windows Defender SmartScreen says "Windows protected your PC" when you
+run it, choose **More info → Run anyway**. (The signed release won't need
+this.)
+
+## 2. Find the printers
+
+```powershell
+.\palate-agent.exe printers
+```
+
+lists the USB printers Windows can see, by the exact names to use below.
+Network printers need their IP address.
+
+## 3. Create the config with the first printer
+
+Give each printer a short **id** that stays the same for good (Palate's jobs
+name it), a **name** for the kitchen, and its paper **width**.
+
+```powershell
+.\palate-agent.exe init p-tandoor -server https://SERVER -name Tandoor -address 192.168.1.50 -width 80
+```
+
+For a USB printer, use `-usb "EPSON TM-T82 Receipt"` instead of `-address`.
+A **test slip prints**; check it's readable (bold station name, accented
+letters, a Kannada line) and that the paper is cut. If the test print fails,
+nothing is saved: check the printer is on, has paper and is at that address.
+
+## 4. Add the other printers
+
+```powershell
+.\palate-agent.exe printer add p-wok -name Wok -address 192.168.1.51 -width 80
+```
+
+```powershell
+.\palate-agent.exe printer add p-pass -name Pass -usb "EPSON TM-T82 Receipt" -width 80
+```
+
+Optionally give a printer a **backup on this till**, used automatically when
+it's off, jammed or out of paper:
+
+```powershell
+.\palate-agent.exe printer set p-tandoor -backup p-pass
+```
+
+Check the list:
+
+```powershell
+.\palate-agent.exe printer list
+```
+
+## 5. Install, pair and start
+
+```powershell
+.\palate-agent.exe install -start=false
+```
+
+installs the Windows service: the program goes to
+`C:\Program Files\PalatePrintAgent`, it runs under its own account, starts
+with Windows and restarts itself after a crash. Then, with a fresh code from
+the portal:
+
+```powershell
+.\palate-agent.exe pair -code K7Q2-M9XD
+```
+
+```powershell
+.\palate-agent.exe start
+```
+
+```powershell
+.\palate-agent.exe status
+```
+
+`status` should say **running**, with log lines ending in "printers
+registered".
+
+## 6. Check with a real order
+
+1. In the portal, link each station (and the bill) to one of this till's
+   printers.
+2. Place a test order with dishes for two stations. Each station's ticket
+   should print on its printer within a second or two.
+3. Print a bill. It should fill the paper's width, with nothing cut off on
+   the right.
+4. Switch one printer off and place another order: its ticket should print
+   on its backup with a "BACKUP FOR …" banner.
+5. Unplug the till's network cable for a minute, place an order, plug it
+   back in: the ticket prints within about 12 seconds of the network
+   returning.
+
+## Day to day
+
+| Task | Command (PowerShell as administrator) |
+| --- | --- |
+| Is it running? | `palate-agent status` |
+| A printer got a new IP address | `palate-agent printer set p-tandoor -address 192.168.1.60` |
+| A printer was replaced | `printer set` with its new address or `-usb` name; same id |
+| Change paper width | `palate-agent printer set p-pass -width 58` |
+| Test a printer | `palate-agent test-print -printer p-tandoor` |
+| Restart | `palate-agent stop`, then `palate-agent start` |
+| Remove the agent | `palate-agent uninstall` (keeps `C:\ProgramData\PalatePrintAgent`) |
+
+After install, `palate-agent` is in `C:\Program Files\PalatePrintAgent`; run
+it from there (or from the setup folder).
+
+Every printer change is test-printed first, saved with the old config kept
+as `agent.json.previous`, written to `logs\config-changes.log`, and applied
+by restarting the service.
+
+Which station prints on which printer, and what each station cooks, are set
+in the Palate portal, not on the till.
+
+## Where things are
+
+| What | Where |
+| --- | --- |
+| Program | `C:\Program Files\PalatePrintAgent\palate-agent.exe` |
+| Config | `C:\ProgramData\PalatePrintAgent\agent.json` |
+| Credential (encrypted) | `C:\ProgramData\PalatePrintAgent\credential.bin` |
+| Printed-job ledger (encrypted, job ids only) | `C:\ProgramData\PalatePrintAgent\ledger.bin` |
+| Log | `C:\ProgramData\PalatePrintAgent\logs\agent.log` |
+| Printer change history | `C:\ProgramData\PalatePrintAgent\logs\config-changes.log` |
+
+The data folder is closed to everyone but Windows itself, administrators and
+the agent.
+
+## If something's wrong
+
+| Symptom | What to check |
+| --- | --- |
+| The log says "re-pair this till" (the service keeps stopping and restarting) | The till was revoked or its credential replaced: get a new code, run `pair`, then `palate-agent stop` and `palate-agent start`. |
+| A USB printer "can't be seen" in the log | Install it for all users, or reinstall the service with `palate-agent install -account localsystem`. |
+| Tickets print as BACKUP FOR … | The main printer is off, out of paper or its address changed. `printer set … -address`. |
+| Bills fail with "Edge drew nothing" | Edge is missing or blocked by policy; set `"edge_path"` in `agent.json` to `msedge.exe`'s location. |
+| Bills cut off on the right | The bill's HTML has a fixed width; Palate's design must use the full width (their spec, section 10). |
+| Nothing prints, `status` running | Check the portal links stations to this till's printers, and the till can reach `https://SERVER`. |
+
+The log (`logs\agent.log`) says what happened to every ticket, in plain
+words.

@@ -46,6 +46,14 @@ from a terminal opened with "Run as administrator".
 Which station prints on which printer, and what each station cooks, are set
 in Palate, not here. A printer's id can't be changed: Palate's jobs name it.`
 
+// writeHint turns "access denied" into what to do about it.
+func writeHint(err error) error {
+	if errors.Is(err, os.ErrPermission) {
+		return fmt.Errorf("%w (%v)", config.ErrNeedAdmin, err)
+	}
+	return err
+}
+
 func cmdPrinter(args []string) error {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, printerUsage)
@@ -103,6 +111,7 @@ func printerChange(verb string, args []string) error {
 	usb := fs.String("usb", "", "USB printer: its name in Windows (see palate-agent printers)")
 	width := fs.Int("width", 0, "paper width in mm: 58 or 80")
 	backup := fs.String("backup", "", "id of another printer on this till to use when this one is down, or none")
+	server := fs.String("server", "", "init only: Palate's server, https://...")
 	noTest := fs.Bool("no-test", false, "save without a test print (say, the printer is off right now)")
 	noRestart := fs.Bool("no-restart", false, "save without restarting the service")
 	if err := fs.Parse(args); err != nil {
@@ -118,9 +127,29 @@ func printerChange(verb string, args []string) error {
 		return errors.New("a printer is either network (-address) or USB (-usb), not both")
 	}
 
-	raw, err := config.Read(*path)
-	if err != nil {
-		return err
+	var raw *config.Config
+	var err error
+	creating := false
+	if verb == "init" {
+		if _, err := os.Stat(*path); err == nil {
+			return fmt.Errorf("%s already exists; change printers with palate-agent printer set or add", *path)
+		}
+		if *server == "" {
+			return errors.New("init: -server is required (Palate's server, https://...)")
+		}
+		if err := os.MkdirAll(filepath.Dir(*path), 0o755); err != nil {
+			return fmt.Errorf("init: %w", writeHint(err))
+		}
+		raw = &config.Config{Server: *server}
+		creating = true
+		verb = "add"
+	} else {
+		if *server != "" {
+			return errors.New("-server is set once, with init; changing it means pairing again")
+		}
+		if raw, err = config.Read(*path); err != nil {
+			return err
+		}
 	}
 	var before *config.Printer
 	var testNeeded bool
@@ -182,6 +211,11 @@ func printerChange(verb string, args []string) error {
 	fmt.Println("saved: " + change)
 	recordChange(*path, change)
 
+	if creating {
+		fmt.Println("created " + *path)
+		fmt.Println("next: add any other printers (palate-agent printer add ...), then palate-agent install -start=false, palate-agent pair -code <code>, palate-agent start")
+		return nil
+	}
 	switch verb {
 	case "add":
 		fmt.Println("Palate is told about the new printer when the service restarts, but sends it nothing until a station or the bill is linked to it in Palate.")

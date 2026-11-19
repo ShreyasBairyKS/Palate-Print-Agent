@@ -109,3 +109,35 @@ func TestPrinterCommandRefusesBadChanges(t *testing.T) {
 		t.Fatalf("-no-test: %v\n%s", err, out)
 	}
 }
+
+func TestInitCreatesTheConfig(t *testing.T) {
+	exe := buildAgent(t)
+	fp := spyPrinter(t, fakeprinter.Config{})
+	cfgPath := filepath.Join(t.TempDir(), "PalatePrintAgent", "agent.json")
+
+	if out, err := runAgentCmd(t, exe, "init", "p-tandoor", "-name", "Tandoor", "-address", fp.addr, "-config", cfgPath); err == nil {
+		t.Fatalf("init without -server was accepted\n%s", out)
+	}
+	if out, err := runAgentCmd(t, exe, "init", "p-tandoor", "-server", "http://palate.example", "-name", "Tandoor", "-address", fp.addr, "-config", cfgPath); err == nil {
+		t.Fatalf("init with a plain-http server was accepted\n%s", out)
+	}
+	out, err := runAgentCmd(t, exe, "init", "p-tandoor", "-server", "https://palate.example", "-name", "Tandoor", "-address", fp.addr, "-config", cfgPath)
+	if err != nil {
+		t.Fatalf("init: %v\n%s", err, out)
+	}
+	select {
+	case <-fp.accepted:
+	default:
+		t.Fatal("init didn't test-print the first printer")
+	}
+	c, err := config.Load(cfgPath)
+	if err != nil || c.Server != "https://palate.example" || c.Find("p-tandoor") == nil {
+		t.Fatalf("created config: %+v, %v", c, err)
+	}
+	if out, err := runAgentCmd(t, exe, "init", "p-x", "-server", "https://palate.example", "-name", "X", "-address", fp.addr, "-config", cfgPath); err == nil {
+		t.Fatalf("a second init overwrote the config\n%s", out)
+	}
+	if out, err := runAgentCmd(t, exe, "printer", "set", "p-tandoor", "-server", "https://evil.example", "-config", cfgPath); err == nil {
+		t.Fatalf("printer set changed the server\n%s", out)
+	}
+}

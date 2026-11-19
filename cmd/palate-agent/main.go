@@ -1,6 +1,7 @@
 // Command palate-agent is the Palate print agent.
 //
 //	palate-agent printers                  # Windows printers this process can see (for usb)
+//	palate-agent init p-tandoor -server https://... -name Tandoor -address 192.168.1.50   # creates agent.json
 //	palate-agent pair -code K7Q2-M9XD      # once per till, with a code from the portal
 //	palate-agent test-print -printer p-tandoor
 //	palate-agent printer list | set | add | remove   # change this till's printers
@@ -46,6 +47,7 @@ func usage() {
 
 commands:
   printers    list the Windows printers this process can see (for usb)
+  init        create the config with its first printer (test-printed): init <id> -server URL -name NAME -address IP | -usb NAME [-width 58|80]
   pair        redeem a pairing code from the portal and register printers
   test-print  print a test slip on one printer
   printer     list or change this till's printers: printer list | set | add | remove
@@ -75,6 +77,8 @@ func main() {
 		err = cmdTestPrint(args)
 	case "printer":
 		err = cmdPrinter(args)
+	case "init":
+		err = printerChange("init", args)
 	case "run":
 		err = cmdRun(args, log)
 	case "install":
