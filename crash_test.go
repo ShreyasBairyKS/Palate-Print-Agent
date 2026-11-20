@@ -64,7 +64,7 @@ func writeConfig(t *testing.T, dir, server, printerAddr, statusTimeout string) s
 		"server":     server,
 		"agent_name": "crash-till",
 		"printers":   []map[string]any{{"id": "p0", "name": "Tandoor", "kind": "network", "address": printerAddr, "width": 80}},
-		"timings":    map[string]any{"status_timeout": statusTimeout},
+		"timings":    map[string]any{"status_timeout": statusTimeout, "idle_check_every": "-1s"}, // only tickets connect
 	}
 	b, _ := json.MarshalIndent(cfg, "", "  ")
 	path := filepath.Join(dir, "agent.json")

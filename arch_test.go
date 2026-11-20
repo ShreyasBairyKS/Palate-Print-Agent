@@ -36,6 +36,7 @@ var rules = []struct {
 	{"printer/net", []string{"net/http"}},
 	{"printer/usb", []string{"net/http"}},
 	{"printer/discover", []string{"net/http", "crypto/tls"}},
+	{"status", []string{"net", "net/http"}},
 }
 
 func TestNothingBelowJobSourceSpeaksHTTP(t *testing.T) {

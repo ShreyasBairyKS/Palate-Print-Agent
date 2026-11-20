@@ -38,6 +38,9 @@ const keep = 30
 
 // Record stores a finished connection. Use it as (part of) Config.OnConn.
 func (c *Control) Record(conn Conn) {
+	if conn.StatusOnly() {
+		return // a printer check, not a ticket
+	}
 	t := Ticket{Seq: conn.Seq, At: conn.Started, Mode: conn.Mode, Read: conn.Read, Kept: len(conn.Data),
 		Note: conn.Note, Millis: conn.Ended.Sub(conn.Started).Milliseconds(), Lines: []escpos.Line{}}
 	if lines := escpos.Preview(conn.Data); len(lines) > 0 {

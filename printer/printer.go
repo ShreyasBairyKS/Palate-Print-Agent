@@ -15,7 +15,9 @@ type Writer interface {
 }
 
 // Prober is implemented by writers that can check a printer is reachable
-// without printing anything. The queue uses it to bring a down printer back.
+// without printing anything. The queue uses it to bring a down printer back
+// and to check idle printers. A failure should be a *Error, so its Kind says
+// why (no answer, refused, paper out).
 type Prober interface {
 	Probe(ctx context.Context) error
 }

@@ -9,6 +9,7 @@
 //	palate-agent printer list | set | add | remove   # change this till's printers
 //	palate-agent run                       # foreground (or as the service, when Windows starts it)
 //	palate-agent install                   # as administrator: install and start the Windows service
+//	palate-agent monitor                   # the status window: printers and connection, no administrator rights needed
 //	palate-agent status | start | stop | uninstall
 //	palate-agent version
 //
@@ -34,6 +35,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
 	usbprinter "github.com/ShreyasBairyKS/Palate-Print-Agent/printer/usb"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
 
 func defaultConfigPath() string {
@@ -42,6 +44,31 @@ func defaultConfigPath() string {
 		base = "."
 	}
 	return filepath.Join(base, "PalatePrintAgent", "agent.json")
+}
+
+// cmdMonitor shows the status window, or the same in the console where
+// there are no windows.
+func cmdMonitor(args []string) error {
+	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
+	path := fs.String("config", defaultConfigPath(), "path to agent.json")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if guiAvailable() {
+		if err := runMonitor(*path, startedByDoubleClick()); err == nil {
+			return nil
+		}
+	}
+	svc := "unknown"
+	switch info, err := service.Status(); {
+	case err == nil:
+		svc = info.State
+	case errors.Is(err, service.ErrNotInstalled):
+		svc = ""
+	}
+	f, err := status.Read(status.PathFor(*path))
+	printStatusView(describeStatus(f, err, svc, time.Now()))
+	return nil
 }
 
 func usage() {
@@ -57,7 +84,9 @@ commands:
   printer     list, find or change this till's printers: printer list | find | set | add | remove
   run         poll for jobs and print them (foreground)
   install     install the Windows service and start it (as administrator)
-  status      show whether the service is running, with recent log lines
+  monitor     show the status window: each printer working or not, and the connection to Palate
+              (what double-clicking palate-agent.exe shows once the agent is installed)
+  status      show whether the service is running, its printers, and recent log lines
   start       start the service (as administrator)
   stop        stop the service, letting tickets in hand finish (as administrator)
   uninstall   stop and remove the service; the data folder is kept (as administrator)
@@ -105,6 +134,8 @@ func main() {
 		err = cmdStop()
 	case "status":
 		err = cmdStatus(args)
+	case "monitor":
+		err = cmdMonitor(args)
 	case "version":
 		fmt.Println(agent.Version)
 	default:

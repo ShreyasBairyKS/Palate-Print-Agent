@@ -19,6 +19,13 @@
 // refused connection that survives the retries. While it is down its tickets
 // go straight to the backup, and it is probed every 30 s until it answers.
 //
+// Idle printers are checked too, a few seconds after the start and then once
+// a minute, so a printer switched off or out of paper between orders is seen
+// before the next ticket, not by it. A check is a connection and a status
+// question, never printing; it must fail on every retry before the printer
+// is marked down. Printers that can't be checked (USB) stay "unknown" until
+// they print.
+//
 // Nothing here may import net/http (arch_test.go checks).
 package queue
 
@@ -28,6 +35,7 @@ import (
 	"fmt"
 	"image"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +76,8 @@ type Config struct {
 	RetryGap       time.Duration  // default 1s
 	DelayedAfter   time.Duration  // DELAYED banner past this age; default 10m
 	ProbeEvery     time.Duration  // how often a down printer is checked; default 30s
+	IdleCheckEvery time.Duration  // how often an idle printer is checked; default 1m, negative for never
+	FirstCheck     time.Duration  // the first idle check after the start; default 3s
 	ReportAttempts int            // tries to report an outcome; default 5
 	Location       *time.Location // order times are printed in this zone; default time.Local
 	Now            func() time.Time
@@ -91,11 +101,14 @@ const CrashRecovery = "crash-recovery"
 // failed attempt may have put part of it on paper.
 const RetryAfterPartial = "earlier attempt partly printed"
 
-// State is a printer's health as last seen, for the poll's health payload.
+// State is a printer's health as last seen, for the poll's health payload
+// and the till's status file.
 type State struct {
 	ID        string
-	State     string // "up", "down" or "unknown"
-	LastError string // an error class, never slip contents
+	State     string    // "up", "down" or "unknown"
+	LastError string    // an error class, never slip contents
+	Since     time.Time // when State last changed (the start, at first)
+	Checked   time.Time // the last print or check that confirmed State; zero if none yet
 }
 
 // Queue owns one worker per printer.
@@ -149,6 +162,12 @@ func New(printers []Printer, reporter Reporter, cfg Config) *Queue {
 	if cfg.ProbeEvery == 0 {
 		cfg.ProbeEvery = 30 * time.Second
 	}
+	if cfg.IdleCheckEvery == 0 {
+		cfg.IdleCheckEvery = time.Minute
+	}
+	if cfg.FirstCheck == 0 {
+		cfg.FirstCheck = 3 * time.Second
+	}
 	if cfg.ReportAttempts == 0 {
 		cfg.ReportAttempts = 5
 	}
@@ -163,7 +182,7 @@ func New(printers []Printer, reporter Reporter, cfg Config) *Queue {
 	}
 	q := &Queue{cfg: cfg, reporter: reporter, workers: map[string]*worker{}, pending: map[string]bool{}}
 	for _, p := range printers {
-		q.workers[p.ID] = &worker{p: p, wake: make(chan struct{}, 1), st: State{ID: p.ID, State: "unknown"}}
+		q.workers[p.ID] = &worker{p: p, wake: make(chan struct{}, 1), st: State{ID: p.ID, State: "unknown", Since: cfg.Now()}}
 	}
 	for _, p := range printers {
 		if p.Backup == "" {
@@ -261,7 +280,7 @@ func (q *Queue) Depth() int {
 	return n
 }
 
-// States reports each printer's last known health.
+// States reports each printer's last known health, sorted by id.
 func (q *Queue) States() []State {
 	out := make([]State, 0, len(q.workers))
 	for _, w := range q.workers {
@@ -269,16 +288,29 @@ func (q *Queue) States() []State {
 		out = append(out, w.st)
 		w.mu.Unlock()
 	}
+	slices.SortFunc(out, func(a, b State) int { return strings.Compare(a.ID, b.ID) })
 	return out
 }
 
 func (q *Queue) run(ctx context.Context, w *worker) {
+	// Idle checks, for printers that can be checked without printing.
+	var idle <-chan time.Time
+	var timer *time.Timer
+	if _, ok := w.p.Writer.(printer.Prober); ok && q.cfg.IdleCheckEvery > 0 {
+		timer = time.NewTimer(q.cfg.FirstCheck)
+		defer timer.Stop()
+		idle = timer.C
+	}
 	for {
 		w.mu.Lock()
 		if len(w.tasks) == 0 {
 			w.mu.Unlock()
 			select {
 			case <-w.wake:
+				continue
+			case <-idle:
+				q.idleCheck(ctx, w)
+				timer.Reset(q.cfg.IdleCheckEvery)
 				continue
 			case <-ctx.Done():
 				return
@@ -519,6 +551,61 @@ func (q *Queue) write(ctx context.Context, w *worker, id string, data []byte) (j
 	return job.Outcome{Kind: job.Failed, Reason: fmt.Sprintf("printer %s (%s): %v", w.p.Name, w.p.ID, lastErr)}, lastErr
 }
 
+// idleCheck asks an idle printer how it is, without printing. A down printer
+// is left to its own probe. A failure counts only if every retry fails too,
+// because a printer busy with another connection can refuse one; a ticket
+// arriving meanwhile ends the check, and its print decides instead.
+func (q *Queue) idleCheck(ctx context.Context, w *worker) {
+	if w.down() {
+		return
+	}
+	p := w.p.Writer.(printer.Prober)
+	var err error
+	for attempt := 0; attempt <= q.cfg.FastRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(q.cfg.RetryGap):
+			case <-ctx.Done():
+				return
+			}
+			if w.hasTasks() {
+				return
+			}
+		}
+		if err = p.Probe(ctx); err == nil {
+			if w.state() != "up" {
+				q.cfg.Log.Info("printer checked: answering", "printer", w.p.ID)
+			}
+			q.setState(w, "up", "")
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if printer.KindOf(err) == printer.PaperOut {
+			break // the printer answered: no point asking again
+		}
+	}
+	why := printer.KindOf(err).String()
+	if why == "unknown" {
+		why = "not answering"
+	}
+	q.cfg.Log.Warn("idle printer check failed; marking it down", "printer", w.p.ID, "kind", why, "err", err)
+	q.markDown(w, why)
+}
+
+func (w *worker) hasTasks() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.tasks) > 0
+}
+
+func (w *worker) state() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.st.State
+}
+
 func (w *worker) down() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -532,8 +619,17 @@ func (w *worker) lastError() string {
 }
 
 func (q *Queue) setState(w *worker, state, lastErr string) {
+	now := q.cfg.Now()
 	w.mu.Lock()
+	if w.st.State != state {
+		w.st.Since = now
+	}
 	w.st.State = state
+	if state == "unknown" {
+		w.st.Checked = time.Time{}
+	} else {
+		w.st.Checked = now
+	}
 	if lastErr != "" {
 		w.st.LastError = lastErr
 	}
@@ -542,7 +638,12 @@ func (q *Queue) setState(w *worker, state, lastErr string) {
 
 // markDown records the printer as down and starts probing it.
 func (q *Queue) markDown(w *worker, lastErr string) {
+	now := q.cfg.Now()
 	w.mu.Lock()
+	if w.st.State != "down" {
+		w.st.Since = now
+	}
+	w.st.Checked = now
 	w.st.State = "down"
 	w.st.LastError = lastErr
 	start := !w.probing && q.ctx != nil
@@ -580,10 +681,15 @@ func (q *Queue) probe(w *worker) {
 			q.setState(w, "unknown", "")
 			return
 		}
-		if err := p.Probe(q.ctx); err == nil {
+		err := p.Probe(q.ctx)
+		if err == nil {
 			q.cfg.Log.Info("printer answering again", "printer", w.p.ID)
 			q.setState(w, "up", "")
 			return
+		}
+		// Still down; say why now (paper out once it's back on the network).
+		if k := printer.KindOf(err); k != 0 && q.ctx.Err() == nil {
+			q.markDown(w, k.String())
 		}
 	}
 }

@@ -95,6 +95,7 @@ func (w *Writer) Write(ctx context.Context, data []byte) (printer.Result, error)
 
 // Probe checks the printer accepts a connection, without printing: it
 // connects and, if the printer answers a status query, checks for paper.
+// A failure is a *printer.Error: Hang, Refused or PaperOut.
 var _ printer.Prober = (*Writer)(nil)
 
 func (w *Writer) Probe(ctx context.Context) error {
@@ -107,16 +108,19 @@ func (w *Writer) Probe(ctx context.Context) error {
 	defer cancel()
 	conn, err := dial(dctx, "tcp", w.Addr)
 	if err != nil {
-		return err
+		if isTimeout(err) || errors.Is(dctx.Err(), context.DeadlineExceeded) {
+			return &printer.Error{Kind: printer.Hang, Err: fmt.Errorf("connect to %s: no answer in %s", w.Addr, connectTimeout)}
+		}
+		return &printer.Error{Kind: printer.Refused, Err: err}
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(orDefault(w.StatusTimeout, 500*time.Millisecond)))
 	if _, err := conn.Write(statusQuery); err != nil {
-		return err
+		return &printer.Error{Kind: printer.Refused, Err: err}
 	}
 	reply := make([]byte, 1)
 	if n, _ := conn.Read(reply); n == 1 && paperOut(reply[0]) {
-		return errors.New("printer reports paper end")
+		return &printer.Error{Kind: printer.PaperOut, Err: errors.New("printer reports paper end")}
 	}
 	return nil
 }

@@ -46,13 +46,25 @@ const (
 // Administrators, the account running this process and the agent service's
 // account, and stops it inheriting anything else from its folder. Call it on
 // a new file before writing secrets into it.
-func Restrict(path string) error {
+func Restrict(path string) error { return restrict(path, "") }
+
+// ReadableByLocalUsers is Restrict, plus read-only access for every local
+// user. It is for the till's status file, which holds no secrets and which
+// the status window reads without administrator rights. Opening it by its
+// full path works even though its folder is closed to them: Windows lets
+// every account pass through folders it can't list.
+func ReadableByLocalUsers(path string) error {
+	// FR = file read. BU = BUILTIN\Users.
+	return restrict(path, "(A;;FR;;;BU)")
+}
+
+func restrict(path, extra string) error {
 	sid, err := currentUserSID()
 	if err != nil {
 		return fmt.Errorf("fileacl: %w", err)
 	}
 	// P = protected (no inherited entries). FA = full access.
-	sddl := "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + sid + ")(A;;FA;;;" + ServiceSID(ServiceName) + ")"
+	sddl := "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;" + sid + ")(A;;FA;;;" + ServiceSID(ServiceName) + ")" + extra
 	sddlPtr, err := syscall.UTF16PtrFromString(sddl)
 	if err != nil {
 		return err

@@ -28,6 +28,11 @@ the pairing code, and press **Install and
 start**. It installs the Windows service, pairs and starts it. `docs/TILL-SETUP.md` has the details and the same steps as
 individual commands.
 
+**Afterwards, double-click it again** to see how the printers are: a status
+window shows each printer working or not (and why), the connection to
+Palate, and what to do. It needs no administrator rights, so staff can open
+it.
+
 ## See it working (5 minutes, no installation)
 
 In this folder, open PowerShell and run:

@@ -108,7 +108,8 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, failure ladder to the backup, probing down printers, report |
 | `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
-| `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `install`, `status`, `start`, `stop`, `uninstall`, `version` |
+| `status/` | | The till's status file (`status.json` beside the config): each printer's state, the connection to Palate, tickets waiting. No secrets; readable, and only readable, by local users, so the status window needs no administrator rights |
+| `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `install`, `monitor`, `status`, `start`, `stop`, `uninstall`, `version` |
 | `service/` | | The Windows service: start, clean stop, install with restart-on-failure, status |
 | `internal/logfile/` | | The service's log file, rotated by size |
 | `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder and ticket preview, fake printer with a control API, mock server |
@@ -220,7 +221,8 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 
 | Command | What it does |
 | --- | --- |
-| Double-click `palate-agent.exe` | Opens the setup window (asks for administrator rights): server, printers (each test-printed), pairing code, Install and start. On an installed PC it opens on the installed printers |
+| Double-click `palate-agent.exe` | Before installing: opens the setup window (asks for administrator rights): server, printers (each test-printed), pairing code, Install and start. Once installed: opens the status window (no administrator rights), with **Change setup...** for the setup window |
+| `palate-agent monitor` | The status window: each printer working or not and why, the connection to Palate, and what to do; refreshed every 2 s, and the window flashes in the taskbar when a printer goes down. No administrator rights needed |
 | `palate-agent setup` | The same steps as questions in the console; `-gui` opens the window instead |
 | `palate-agent init p-tandoor -server https://… -name Tandoor -address 192.168.1.50` | Creates the config with its first printer, test-printed; refuses if one exists |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
@@ -230,7 +232,7 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 | `palate-agent test-print -printer p-tandoor` | Prints a test slip (bold, accented letters, a Kannada line and the cut, so one print checks what a real printer can get wrong) and says whether the printer confirmed it |
 | `palate-agent run` | Polls and prints in the foreground until Ctrl-C (tickets in hand finish first), or until the credential is revoked |
 | `palate-agent install` | As administrator: installs the Windows service and starts it if the till is paired (see below) |
-| `palate-agent status` | Whether the service is installed and running, its account, and its last log lines; needs no administrator rights |
+| `palate-agent status` | Whether the service is installed and running, its account, each printer's state, the connection to Palate, and its last log lines (the log for administrators only); needs no administrator rights |
 | `palate-agent start` / `stop` | As administrator. Stop lets the tickets in hand finish (up to 10 s) |
 | `palate-agent uninstall` | As administrator: stops and removes the service and the program; keeps the data folder |
 
@@ -366,6 +368,7 @@ Config rules:
 | `fast_retries` / `retry_gap` | 2 / 1s | Retries after a refused connection only |
 | `delayed_after` | 10m | Older jobs print with a DELAYED banner |
 | `probe_every` | 30s | How often a down network printer is checked |
+| `idle_check_every` | 1m | How often an idle network printer is checked (a connection and a status question, never printing), so a printer switched off or out of paper between orders is seen before the next ticket. The first check is 3 s after the start. `-1s` turns it off |
 
 ### What happens to a ticket
 

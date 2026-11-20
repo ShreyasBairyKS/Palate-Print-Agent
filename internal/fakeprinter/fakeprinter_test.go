@@ -185,3 +185,17 @@ func TestStatusParserRejectsNonQueries(t *testing.T) {
 		t.Fatalf("found queries %v, want [4 1]", found)
 	}
 }
+
+func TestStatusOnly(t *testing.T) {
+	for data, want := range map[string]bool{
+		"\x10\x04\x01":             true,
+		"\x10\x04\x04\x10\x04\x01": true,
+		"":                         false,
+		"\x1b@hello\x10\x04\x04":   false,
+		"\x10\x04":                 false,
+	} {
+		if got := (Conn{Data: []byte(data)}).StatusOnly(); got != want {
+			t.Errorf("StatusOnly(%q) = %v, want %v", data, got, want)
+		}
+	}
+}

@@ -61,6 +61,9 @@ func newRig(t *testing.T, scfg mockserver.Config, modes ...fakeprinter.Config) *
 		})
 	}
 	cfg.Timings.RetryGap = config.Duration(50 * time.Millisecond)
+	// Only tickets connect to these printers, so each connection is one
+	// ticket; idle checks have their own tests (queue, agent).
+	cfg.Timings.IdleCheckEvery = config.Duration(-1)
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}

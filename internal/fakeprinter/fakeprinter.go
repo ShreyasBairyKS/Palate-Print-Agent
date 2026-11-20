@@ -237,6 +237,21 @@ func (p *Printer) Settings() (Mode, Status, int) {
 	return p.cfg.Mode, p.cfg.Status, p.cfg.StopAfter
 }
 
+// StatusOnly reports whether the connection carried nothing but status
+// questions (DLE EOT n), as the agent's printer checks and the printer
+// search do: there was nothing to print.
+func (c Conn) StatusOnly() bool {
+	if len(c.Data) == 0 || len(c.Data)%3 != 0 {
+		return false
+	}
+	for i := 0; i < len(c.Data); i += 3 {
+		if c.Data[i] != 0x10 || c.Data[i+1] != 0x04 {
+			return false
+		}
+	}
+	return true
+}
+
 func (p *Printer) handle(c net.Conn, seq int) {
 	mode, _, stopAfter := p.Settings()
 	rec := Conn{Seq: seq, Remote: c.RemoteAddr().String(), Mode: mode, Started: time.Now()}

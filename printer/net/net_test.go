@@ -138,14 +138,14 @@ func TestProbe(t *testing.T) {
 		t.Fatalf("printer that never answers status: %v; reachable counts as up", err)
 	}
 	paper, _ := fake(t, fakeprinter.Config{Mode: fakeprinter.Normal, Status: fakeprinter.StatusPaperOut})
-	if err := fast(paper).Probe(context.Background()); err == nil {
-		t.Fatal("paper-out printer probed as up")
+	if err := fast(paper).Probe(context.Background()); printer.KindOf(err) != printer.PaperOut {
+		t.Fatalf("paper-out printer: err = %v, want a PaperOut error", err)
 	}
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	gone := ln.Addr().String()
 	ln.Close()
-	if err := fast(gone).Probe(context.Background()); err == nil {
-		t.Fatal("nothing listening, probed as up")
+	if err := fast(gone).Probe(context.Background()); printer.KindOf(err) != printer.Refused {
+		t.Fatalf("nothing listening: err = %v, want a Refused error", err)
 	}
 }
 

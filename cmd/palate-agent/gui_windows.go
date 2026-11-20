@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -23,6 +24,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer/discover"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
 
 var (
@@ -231,6 +233,9 @@ type gui struct {
 	dIDTouched, dSettingID                                              bool
 	dBackups                                                            []string
 
+	// What the running agent last said about each printer, once installed.
+	live map[string]status.Printer
+
 	mu    sync.Mutex
 	queue []func()
 }
@@ -272,33 +277,12 @@ func runGUI(e *setupEnv, ownConsole bool) error {
 
 	g := &gui{env: e, dpi: 96}
 	theGUI = g
-	g.useVisualStyles()
-	pSetProcessDPIAwar.Call()
-	if pGetDpiForSystem.Find() == nil {
-		if d, _, _ := pGetDpiForSystem.Call(); d >= 96 {
-			g.dpi = int(d)
-		}
-	}
+	g.initUI()
 	g.load()
-
-	h, _, _ := windows.NewLazySystemDLL("kernel32.dll").NewProc("GetModuleHandleW").Call(0)
-	g.hinst = h
-	g.font = g.makeFont(9, 400)
-	g.bold = g.makeFont(9, 600)
-	g.title = g.makeFont(15, 600)
-	cursor, _, _ := pLoadCursor.Call(0, 32512)
-	icon, _, _ := pLoadIcon.Call(0, 32512)
-	bg, _, _ := pGetSysColorBrush.Call(colorWindow)
-	for _, c := range []struct {
-		name string
-		proc func(hwnd, m, w, l uintptr) uintptr
-	}{{"PalateSetup", g.mainProc}, {"PalatePrinter", g.dlgProc}, {"PalateFind", g.findProc}} {
-		wc := wndClassEx{lpfnWndProc: windows.NewCallback(c.proc), hInstance: h, hIcon: icon, hIconSm: icon,
-			hCursor: cursor, hbrBackground: bg, lpszClassName: wstr(c.name)}
-		wc.cbSize = uint32(unsafe.Sizeof(wc))
-		if r, _, err := pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
-			return fmt.Errorf("setup window: %v", err)
-		}
+	if err := g.register(map[string]func(hwnd, m, w, l uintptr) uintptr{
+		"PalateSetup": g.mainProc, "PalatePrinter": g.dlgProc, "PalateFind": g.findProc,
+	}); err != nil {
+		return fmt.Errorf("setup window: %v", err)
 	}
 
 	title := "Palate print agent setup"
@@ -334,6 +318,39 @@ func runGUI(e *setupEnv, ownConsole bool) error {
 		}
 		pTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
 		pDispatchMessage.Call(uintptr(unsafe.Pointer(&m)))
+	}
+	return nil
+}
+
+// initUI gets the process ready to draw windows: the current theme, the
+// screen's scaling, and the fonts.
+func (g *gui) initUI() {
+	g.useVisualStyles()
+	pSetProcessDPIAwar.Call()
+	if pGetDpiForSystem.Find() == nil {
+		if d, _, _ := pGetDpiForSystem.Call(); d >= 96 {
+			g.dpi = int(d)
+		}
+	}
+	h, _, _ := kernel32.NewProc("GetModuleHandleW").Call(0)
+	g.hinst = h
+	g.font = g.makeFont(9, 400)
+	g.bold = g.makeFont(9, 600)
+	g.title = g.makeFont(15, 600)
+}
+
+// register creates the window classes, each with its message handler.
+func (g *gui) register(classes map[string]func(hwnd, m, w, l uintptr) uintptr) error {
+	cursor, _, _ := pLoadCursor.Call(0, 32512)
+	icon, _, _ := pLoadIcon.Call(0, 32512)
+	bg, _, _ := pGetSysColorBrush.Call(colorWindow)
+	for name, proc := range classes {
+		wc := wndClassEx{lpfnWndProc: windows.NewCallback(proc), hInstance: g.hinst, hIcon: icon, hIconSm: icon,
+			hCursor: cursor, hbrBackground: bg, lpszClassName: wstr(name)}
+		wc.cbSize = uint32(unsafe.Sizeof(wc))
+		if r, _, err := pRegisterClassEx.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
+			return err
+		}
 	}
 	return nil
 }
@@ -499,6 +516,9 @@ func (g *gui) build() {
 			g.say("No USB receipt printers found.")
 		}
 	}
+	if g.installed {
+		g.watchLive()
+	}
 	g.refreshList()
 	if !g.installed && len(g.printers) == 0 {
 		g.autoSearch()
@@ -527,7 +547,12 @@ func (g *gui) refreshList() {
 			where = "USB: " + p.PrinterName
 		}
 		mark := ""
+		live, haveLive := g.live[p.ID]
 		switch {
+		case gp.test == "" && haveLive && live.State == "up":
+			mark = "   ·   ✓ working"
+		case gp.test == "" && haveLive && live.State == "down":
+			mark = "   ·   ✗ NOT WORKING: " + plainWhy(live.LastError)
 		case gp.test == "testing":
 			mark = "   ·   printing a test slip..."
 		case gp.test == "ok":
@@ -606,6 +631,11 @@ func (g *gui) mainProc(hwnd, m, w, l uintptr) uintptr {
 		return b
 	case wmUser:
 		g.drain()
+		return 0
+	case wmTimer:
+		if g.readLive() {
+			g.refreshList()
+		}
 		return 0
 	case wmClose:
 		if g.busy {
@@ -790,7 +820,36 @@ func (g *gui) installClicked() {
 	}()
 }
 
+// watchLive shows the running agent's view of each printer in the list,
+// read again every two seconds.
+func (g *gui) watchLive() {
+	g.readLive()
+	pSetTimer.Call(g.main, monitorTimer, refreshEvery, 0)
+}
+
+// readLive reads the status file, and reports whether anything shown changed.
+// A missing or old file shows nothing.
+func (g *gui) readLive() bool {
+	live := map[string]status.Printer{}
+	if f, err := status.Read(status.PathFor(g.env.cfgPath)); err == nil && !f.Stale(time.Now()) && f.Stopped == "" {
+		for _, p := range f.Printers {
+			live[p.ID] = p
+		}
+	}
+	changed := len(live) != len(g.live)
+	for id, p := range live {
+		if o, ok := g.live[id]; !ok || o.State != p.State || o.LastError != p.LastError {
+			changed = true
+		}
+	}
+	g.live = live
+	return changed
+}
+
 func (g *gui) becomeInstalled(state string, paired bool) {
+	if !g.installed {
+		defer g.watchLive()
+	}
 	g.installed, g.paired, g.state = true, paired, state
 	send(g.server, emSetReadOnly, 1, 0)
 	if paired {

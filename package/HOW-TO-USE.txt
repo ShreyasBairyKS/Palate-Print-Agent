@@ -58,8 +58,19 @@ You need:
 6. Press "Install and start". When Progress says "Running", close the
    window. The agent now starts with Windows by itself.
 
-Later changes (a new printer, a printer moved): double-click
-palate-agent.exe again. The same window opens on the installed agent.
+Is everything working? Double-click palate-agent.exe again. Once the agent
+is installed, it opens the "Palate printers" status window, with no
+permission question, so anyone on the till can open it:
+  - every printer, working or NOT WORKING and why (out of paper, switched
+    off), and since when;
+  - whether the till is connected to Palate;
+  - what to do about a problem.
+It updates by itself and flashes in the taskbar when a printer stops, so
+it can stay open (minimised) all day.
+
+Later changes (a new printer, a printer moved): in that window press
+"Change setup..." and choose Yes when Windows asks. The setup window opens
+on the installed agent.
 
 Give every network printer a fixed IP address (on the printer, or a "DHCP
 reservation" on the router), so it keeps the same address after a restart.
@@ -161,4 +172,8 @@ IF SOMETHING GOES WRONG
   from the Palate portal. A message about "404" and the server address
   means the address is wrong: use the one Palate gave, with any path it
   has, and without /v1 on the end.
+- A printer shows NOT WORKING in the status window: do what the window
+  says (new paper roll, switch it on, check its cable). It starts printing
+  again by itself within a minute; until then its tickets go to its backup
+  printer, if it has one.
 - Anything else: docs\TILL-SETUP.md, section "If something's wrong".

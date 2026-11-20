@@ -76,6 +76,17 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		return err
 	}
 
+	// Double-clicked where the agent is already installed: show how the
+	// printers are, which needs no administrator rights. Setup is a button
+	// away in that window.
+	if doubleClicked && *window && !service.IsElevated() {
+		if _, err := service.Status(); err == nil {
+			if err := runMonitor(*path, startedByDoubleClick()); err == nil {
+				return nil
+			}
+		}
+	}
+
 	if !service.IsElevated() && !*noElevate {
 		fmt.Println("Palate print agent setup needs administrator rights.")
 		fmt.Println("Windows will ask you to allow it; setup continues in a new window.")

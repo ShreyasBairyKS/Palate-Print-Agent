@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/agent"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/internal/logfile"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
 
 var errNeedAdmin = errors.New("this needs administrator rights: open a terminal with \"Run as administrator\" and run it again")
@@ -195,6 +197,9 @@ func cmdStatus(args []string) error {
 	if info.LastExitErr != "" {
 		fmt.Printf("  %s\n", info.LastExitErr)
 	}
+	f, serr := status.Read(status.PathFor(*path))
+	printStatusView(describeStatus(f, serr, info.State, time.Now()))
+
 	if *lines > 0 {
 		lp := logPath(*path)
 		tail, err := tailLines(lp, *lines)

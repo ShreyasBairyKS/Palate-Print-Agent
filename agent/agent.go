@@ -28,6 +28,7 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/queue"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/source"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/source/cloud"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
 
 // Version is reported in every poll's health payload.
@@ -59,11 +60,20 @@ type Agent struct {
 	// once. Default 10 s; Windows gives a stopping service 20 s.
 	StopGrace time.Duration
 
+	// StatusFile, if set, is where the agent writes how its printers and its
+	// connection are, every few seconds (package status). Till names this
+	// till in it.
+	StatusFile string
+	Till       string
+
 	printers []api.Printer
+	cfgs     []config.Printer
+	started  time.Time
 
 	mu       sync.Mutex
 	lastErr  string
 	restarts int
+	conn     status.Server
 }
 
 // New builds an agent from a validated config and a credential store, and
@@ -76,7 +86,7 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 	if err != nil {
 		return nil, fmt.Errorf("opening ledger %s: %w", cfg.LedgerFile, err)
 	}
-	a := &Agent{Log: log, Ledger: led}
+	a := &Agent{Log: log, Ledger: led, StatusFile: cfg.StatusFile, Till: cfg.AgentName, cfgs: cfg.Printers}
 	var qps []queue.Printer
 	for _, p := range cfg.Printers {
 		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Writer: WriterFor(p, cfg.Timings), Backup: p.Backup})
@@ -85,13 +95,14 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 	cl := &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log, HTTP: newHTTPClient()}
 	a.Cloud = cl
 	a.Queue = queue.New(qps, cl, queue.Config{
-		Ledger:       led,
-		FastRetries:  cfg.Timings.FastRetries,
-		RetryGap:     cfg.Timings.RetryGap.D(),
-		DelayedAfter: cfg.Timings.DelayedAfter.D(),
-		ProbeEvery:   cfg.Timings.ProbeEvery.D(),
-		Log:          log,
-		HTML:         &htmlrender.Edge{Path: cfg.EdgePath, WorkDir: cfg.HTMLWorkDir},
+		Ledger:         led,
+		FastRetries:    cfg.Timings.FastRetries,
+		RetryGap:       cfg.Timings.RetryGap.D(),
+		DelayedAfter:   cfg.Timings.DelayedAfter.D(),
+		ProbeEvery:     cfg.Timings.ProbeEvery.D(),
+		IdleCheckEvery: cfg.Timings.IdleCheckEvery.D(),
+		Log:            log,
+		HTML:           &htmlrender.Edge{Path: cfg.EdgePath, WorkDir: cfg.HTMLWorkDir},
 	})
 	return a, nil
 }
@@ -192,7 +203,11 @@ func fatal(err error) bool {
 // a service stop or a Windows Update restart doesn't cut a ticket in half.
 // Anything still unfinished comes back after its lease (a ticket cut off
 // mid-write prints again marked DUPLICATE).
-func (a *Agent) Run(ctx context.Context) error {
+func (a *Agent) Run(ctx context.Context) (err error) {
+	// The status file's last word, after the queue has finished.
+	stopStatus := a.startStatus()
+	defer func() { stopStatus(err) }()
+
 	// The queue has its own context, cancelled only after the drain. Defers
 	// run in reverse: polling's cancel first, then drain, cancel and wait.
 	qctx, qcancel := context.WithCancel(context.Background())
@@ -215,6 +230,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		err := a.Cloud.RegisterPrinters(ctx, a.printers)
 		if err == nil {
 			a.Log.Info("printers registered", "count", len(a.printers))
+			a.setErr(nil)
 			break
 		}
 		if fatal(err) {
@@ -309,11 +325,20 @@ func (a *Agent) fetchWatched(ctx context.Context) ([]job.Job, error) {
 	}
 }
 
+// setErr records how the last call to the server went: nil for one that
+// worked.
 func (a *Agent) setErr(err error) {
+	now := time.Now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.conn.Connected != (err == nil) {
+		a.conn.Since = now
+	}
+	a.conn.Connected = err == nil
 	if err == nil {
 		a.lastErr = ""
+		a.conn.Error = ""
+		a.conn.LastOK = now
 		return
 	}
 	msg := err.Error()
@@ -321,6 +346,7 @@ func (a *Agent) setErr(err error) {
 		msg = msg[:200]
 	}
 	a.lastErr = msg
+	a.conn.Error = msg
 }
 
 // health is sent with every poll. It carries no customer data.

@@ -315,6 +315,11 @@ Every poll carries:
 | `watchdog_restarts` | Times the agent had to restart a stuck poll. |
 | `bad_version` | An update that failed and was rolled back (for later). |
 
+A network printer's `state` stays current between tickets: the agent checks
+idle printers once a minute (a connection and a status question, never
+printing), so a printer switched off or out of paper shows as `down` before
+the next order. USB printers stay `unknown` until they print.
+
 Health never contains ticket contents or customer data. With it the portal
 can show, per restaurant: each till online or not (last poll time), each
 printer up or down and why ("paper out"), and tickets waiting.

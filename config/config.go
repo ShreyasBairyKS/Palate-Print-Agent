@@ -32,6 +32,12 @@ type Config struct {
 	HTMLWorkDir    string    `json:"html_work_dir,omitempty"`   // scratch space for drawing HTML; defaults to html-work beside the config
 	Printers       []Printer `json:"printers"`
 	Timings        Timings   `json:"timings,omitzero"`
+
+	// StatusFile is where the running agent says how its printers are:
+	// status.json beside the config, always (the status window finds it
+	// there without reading the config, which it may not be allowed to).
+	// Set by Load; empty means no status file.
+	StatusFile string `json:"-"`
 }
 
 // Printer is one printer this till owns.
@@ -48,13 +54,14 @@ type Printer struct {
 // Timings are the agent's tunable numbers. Zero values take the defaults
 // listed on each field.
 type Timings struct {
-	ConnectTimeout Duration `json:"connect_timeout,omitempty"` // default 3s
-	StallTimeout   Duration `json:"stall_timeout,omitempty"`   // write with no progress; default 10s
-	StatusTimeout  Duration `json:"status_timeout,omitempty"`  // wait for a DLE EOT reply; default 500ms
-	FastRetries    int      `json:"fast_retries,omitempty"`    // retries after a refused connection; default 2
-	RetryGap       Duration `json:"retry_gap,omitempty"`       // default 1s
-	DelayedAfter   Duration `json:"delayed_after,omitempty"`   // DELAYED banner past this age; default 10m
-	ProbeEvery     Duration `json:"probe_every,omitempty"`     // how often a down printer is checked; default 30s
+	ConnectTimeout Duration `json:"connect_timeout,omitempty"`  // default 3s
+	StallTimeout   Duration `json:"stall_timeout,omitempty"`    // write with no progress; default 10s
+	StatusTimeout  Duration `json:"status_timeout,omitempty"`   // wait for a DLE EOT reply; default 500ms
+	FastRetries    int      `json:"fast_retries,omitempty"`     // retries after a refused connection; default 2
+	RetryGap       Duration `json:"retry_gap,omitempty"`        // default 1s
+	DelayedAfter   Duration `json:"delayed_after,omitempty"`    // DELAYED banner past this age; default 10m
+	ProbeEvery     Duration `json:"probe_every,omitempty"`      // how often a down printer is checked; default 30s
+	IdleCheckEvery Duration `json:"idle_check_every,omitempty"` // how often an idle printer is checked; default 1m; "-1s" for never
 }
 
 // Duration is a time.Duration written as "3s" in JSON.
@@ -89,6 +96,7 @@ func (t *Timings) applyDefaults() {
 	def(&t.RetryGap, time.Second)
 	def(&t.DelayedAfter, 10*time.Minute)
 	def(&t.ProbeEvery, 30*time.Second)
+	def(&t.IdleCheckEvery, time.Minute)
 	if t.FastRetries == 0 {
 		t.FastRetries = 2
 	}
@@ -118,6 +126,7 @@ func Load(path string) (*Config, error) {
 	if c.AgentName == "" {
 		c.AgentName, _ = os.Hostname()
 	}
+	c.StatusFile = filepath.Join(filepath.Dir(path), "status.json")
 	if err := c.Validate(); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}

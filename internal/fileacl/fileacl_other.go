@@ -7,6 +7,9 @@ import "os"
 // Restrict makes the file readable and writable by its owner only.
 func Restrict(path string) error { return os.Chmod(path, 0o600) }
 
+// ReadableByLocalUsers makes the file writable by its owner and readable by everyone.
+func ReadableByLocalUsers(path string) error { return os.Chmod(path, 0o644) }
+
 // RestrictDir makes the folder usable by its owner only.
 func RestrictDir(path string) error { return os.Chmod(path, 0o700) }
 

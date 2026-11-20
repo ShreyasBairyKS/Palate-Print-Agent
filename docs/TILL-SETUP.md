@@ -49,10 +49,24 @@ printers. It takes about 15 minutes per till.
    saving, installing the service, pairing, starting. When it says
    **Running**, close the window.
 
-Double-clicking again later opens the same window on the installed agent:
-its printers can be tested or changed there (each change is test-printed,
-saved and applied by restarting the service), and an agent that isn't
-paired yet can be paired. The steps below do the same thing one command at
+Double-clicking again later opens the **status window** (Palate printers),
+which needs no administrator rights, so restaurant staff can open it too:
+
+- each printer, **working** or **NOT WORKING** and why (out of paper, can't
+  connect to it, not answering), and since when;
+- whether the till is connected to Palate, and tickets waiting;
+- what to do ("Put a new paper roll in Pass").
+
+It refreshes every 2 seconds and flashes in the taskbar when a printer goes
+down, so it can stay open, minimised, all day. The agent checks idle printers
+once a minute, so a printer switched off between orders shows up before the
+next ticket. USB printers show their state once they print.
+
+**Change setup...** in that window opens the setup window (Windows asks for
+administrator rights): its printers can be tested or changed there (each
+change is test-printed, saved and applied by restarting the service), its
+list shows each printer's live state, and an agent that isn't paired yet can
+be paired. The steps below do the same thing one command at
 a time, for scripted installs or when something needs fixing; `palate-agent
 setup` asks the same questions in the console.
 
@@ -174,7 +188,7 @@ registered".
 
 | Task | Command (PowerShell as administrator) |
 | --- | --- |
-| Is it running? | `palate-agent status` |
+| Is it running? Are the printers working? | Double-click `palate-agent.exe` (status window), or `palate-agent status` |
 | A printer got a new IP address | `palate-agent printer set p-tandoor -address 192.168.1.60` |
 | A printer was replaced | `printer set` with its new address or `-usb` name; same id |
 | Change paper width | `palate-agent printer set p-pass -width 58` |
@@ -202,9 +216,12 @@ in the Palate portal, not on the till.
 | Printed-job ledger (encrypted, job ids only) | `C:\ProgramData\PalatePrintAgent\ledger.bin` |
 | Log | `C:\ProgramData\PalatePrintAgent\logs\agent.log` |
 | Printer change history | `C:\ProgramData\PalatePrintAgent\logs\config-changes.log` |
+| Printer status (what the status window shows) | `C:\ProgramData\PalatePrintAgent\status.json` |
 
 The data folder is closed to everyone but Windows itself, administrators and
-the agent.
+the agent. The one exception is `status.json`, which every local user can
+read (not change): printer names, addresses and states, and the connection
+to Palate. No credential or ticket contents.
 
 ## If something's wrong
 
@@ -212,7 +229,8 @@ the agent.
 | --- | --- |
 | The log says "re-pair this till" (the service keeps stopping and restarting) | The till was revoked or its credential replaced: get a new code, run `pair`, then `palate-agent stop` and `palate-agent start`. |
 | A USB printer "can't be seen" in the log | Install it for all users, or reinstall the service with `palate-agent install -account localsystem`. |
-| Tickets print as BACKUP FOR … | The main printer is off, out of paper or its address changed. `printer set … -address`. |
+| Tickets print as BACKUP FOR … | The main printer is off, out of paper or its address changed; the status window says which. `printer set … -address`. |
+| The status window says "This Windows account can't read the printer status" | The agent was installed by an older version. Install this one over it. |
 | Bills fail with "Edge drew nothing" | Edge is missing or blocked by policy; set `"edge_path"` in `agent.json` to `msedge.exe`'s location. |
 | Bills cut off on the right | The bill's HTML has a fixed width; Palate's design must use the full width (their spec, section 10). |
 | Nothing prints, `status` running | Check the portal links stations to this till's printers, and the till can reach `https://SERVER`. |

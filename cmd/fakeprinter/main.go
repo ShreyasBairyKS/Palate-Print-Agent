@@ -59,6 +59,10 @@ func main() {
 		StopAfter: *after,
 		Status:    status,
 		OnConn: func(c fakeprinter.Conn) {
+			if c.StatusOnly() {
+				log.Printf("conn #%d from %s: status check, answered", c.Seq, c.Remote)
+				return
+			}
 			ctl.Record(c)
 			log.Printf("conn #%d from %s: read %d bytes, kept %d, %s (%s)",
 				c.Seq, c.Remote, c.Read, len(c.Data), c.Note, c.Ended.Sub(c.Started).Round(1e6))
