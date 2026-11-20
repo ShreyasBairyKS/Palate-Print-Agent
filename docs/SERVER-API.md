@@ -38,6 +38,10 @@ layer changes, nothing else.
 - **HTTPS only,** TLS 1.2 or newer, with a certificate from a public
   authority. The agent refuses plain http (except to its own machine, for
   the mock) and refuses redirects.
+- **A path prefix is fine.** The paths below start at `/v1`. If Palate's
+  API lives under a prefix (for example `/api/print-agent/v1/pair`), the
+  till's server address is `https://host/api/print-agent`, and the agent adds
+  `/v1/...` itself. An address that already ends in `/v1` is refused.
 - **JSON in UTF-8.** Times are RFC 3339 (`2026-11-18T14:12:00Z`).
 - **Limits:** the agent reads at most 4 MiB from any response, and at most
   1 MiB of HTML per document.
@@ -293,6 +297,7 @@ Every non-2xx answer has this body:
 | `401 repair_needed` | Stops; logs that the till must be paired again. |
 | `401 unauthorized` | The same. |
 | `404 not_found` (on an outcome) | Retries the report up to 5 times, then logs it as unreported. |
+| `404` without a `not_found` body, on any call | Takes it as a wrong server address (a missing path prefix, or `/v1` twice), says so in the log and retries with backoff. |
 | `429`, `5xx`, timeouts, dropped connections | Waits 1 s doubling to 10 s, with jitter, and tries again. |
 | Any redirect (`3xx`) | Refuses it; treated as an error, retried with backoff. |
 | A response over 4 MiB | Refuses it; retried with backoff. |

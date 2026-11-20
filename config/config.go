@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
@@ -211,6 +212,9 @@ func checkServer(s string) error {
 	u, err := url.Parse(s)
 	if err != nil || u.Host == "" {
 		return fmt.Errorf("server %q is not a URL", s)
+	}
+	if p := strings.TrimRight(u.Path, "/"); p == "/v1" || strings.HasSuffix(p, "/v1") {
+		return fmt.Errorf("server %q ends in /v1: leave /v1 off, because the agent adds it itself", s)
 	}
 	switch u.Scheme {
 	case "https":

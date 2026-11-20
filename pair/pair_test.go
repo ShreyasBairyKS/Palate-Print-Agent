@@ -101,3 +101,16 @@ func TestCredentialFileIsLockedDown(t *testing.T) {
 		t.Fatalf("credential file access list %q lets more than SYSTEM, Administrators and the agent in", desc)
 	}
 }
+
+func TestRedeemWrongAddressSaysSo(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	defer ts.Close()
+	store := &MemStore{}
+	_, err := Redeem(context.Background(), http.DefaultClient, ts.URL, "K7Q2-M9XD", "till-1", store)
+	if err == nil || !strings.Contains(err.Error(), "404") || !strings.Contains(err.Error(), "server address") {
+		t.Fatalf("err = %v; want a message about the server address", err)
+	}
+	if c, _ := store.Load(); c != "" {
+		t.Fatal("a credential was saved")
+	}
+}

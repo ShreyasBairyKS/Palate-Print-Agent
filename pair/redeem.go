@@ -38,6 +38,9 @@ func Redeem(ctx context.Context, client *http.Client, server, code, agentName st
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		json.Unmarshal(data, &e)
+		if resp.StatusCode == http.StatusNotFound {
+			return "", fmt.Errorf("pairing: the server has nothing at %s (404). %s", api.PathPair, api.AddressHint)
+		}
 		return "", fmt.Errorf("pairing refused (%d %s): %s", resp.StatusCode, e.Code, e.Message)
 	}
 	var pr api.PairResponse

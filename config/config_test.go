@@ -42,12 +42,13 @@ func TestCheckPrinterAddress(t *testing.T) {
 }
 
 func TestCheckServer(t *testing.T) {
-	for _, s := range []string{"https://api.palate.example", "http://127.0.0.1:8080"} {
+	for _, s := range []string{"https://api.palate.example", "http://127.0.0.1:8080", "https://dev.palate.example/api/print-agent", "https://dev.palate.example/api/print-agent/"} {
 		if err := checkServer(s); err != nil {
 			t.Errorf("%s: %v", s, err)
 		}
 	}
-	for _, s := range []string{"http://api.palate.example", "http://192.168.1.2:8080", "ftp://x", "not a url"} {
+	for _, s := range []string{"http://api.palate.example", "http://192.168.1.2:8080", "ftp://x", "not a url",
+		"https://dev.palate.example/api/print-agent/v1", "https://dev.palate.example/v1/", "https://dev.palate.example/api/v1"} {
 		if err := checkServer(s); err == nil {
 			t.Errorf("%s accepted; want an error", s)
 		}

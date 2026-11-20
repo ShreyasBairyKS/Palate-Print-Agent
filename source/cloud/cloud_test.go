@@ -221,3 +221,28 @@ func TestDocumentRules(t *testing.T) {
 		t.Fatalf("a good document job: %+v, %v", j, err)
 	}
 }
+
+func TestWrongAddressIsNotAnUnknownJob(t *testing.T) {
+	f := setup(t, time.Second)
+	// A server that answers 404 with no Palate error body, as a framework does for a path it doesn't have.
+	plain := httptest.NewServer(http.NotFoundHandler())
+	defer plain.Close()
+	f.client.Server = plain.URL
+
+	for name, call := range map[string]func() error{
+		"poll": func() error { _, err := f.client.Fetch(context.Background()); return err },
+		"printers": func() error {
+			return f.client.RegisterPrinters(context.Background(), []api.Printer{{ID: "p1", Name: "A", Kind: "network", Width: 80}})
+		},
+		"outcome": func() error { return f.client.Report(context.Background(), "job-1", job.Outcome{Kind: job.Written}) },
+	} {
+		err := call()
+		if !errors.Is(err, ErrWrongAddress) || errors.Is(err, ErrUnknownJob) {
+			t.Errorf("%s: err = %v, want ErrWrongAddress and not ErrUnknownJob", name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "without /v1") || !strings.Contains(err.Error(), "/v1/") {
+			t.Errorf("%s: the message doesn't tell what to do: %v", name, err)
+		}
+	}
+}

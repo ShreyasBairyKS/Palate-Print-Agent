@@ -27,7 +27,9 @@ printers. It takes about 15 minutes per till.
 2. **Double-click `palate-agent.exe`.** Windows asks to allow it to make
    changes: choose **Yes**. The **Palate print agent setup** window opens.
 3. Fill it in, top to bottom:
-   - **1 · Palate's server address** (`https://…`).
+   - **1 · Palate's server address** (`https://…`), exactly as Palate gave
+     it, including any path such as `/api/print-agent`, but **without
+     `/v1`** on the end: the agent adds that itself.
    - **2 · Printers:** when the window opens it looks for receipt
      printers on the till's network by itself (a few seconds) and says what
      it found in **Progress**. Press **Find printers…** to see them. If you

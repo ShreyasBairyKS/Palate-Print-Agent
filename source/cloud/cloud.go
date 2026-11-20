@@ -41,6 +41,10 @@ var (
 	ErrTooLarge = errors.New("cloud: response larger than the agent accepts")
 	// ErrUnknownJob means the server has no such job for this restaurant.
 	ErrUnknownJob = errors.New("cloud: unknown job")
+	// ErrWrongAddress means the server answered 404 without saying "no such
+	// job": the path the agent asked for doesn't exist there, so the server
+	// address in the config is wrong (a missing path prefix, or /v1 twice).
+	ErrWrongAddress = errors.New("cloud: the server has nothing at this address (404)")
 )
 
 // Client is a JobSource backed by the Palate cloud.
@@ -132,8 +136,10 @@ func (c *Client) do(ctx context.Context, method, path string, in any) ([]byte, i
 		return nil, resp.StatusCode, ErrRepairNeeded
 	case resp.StatusCode == http.StatusUnauthorized:
 		return nil, resp.StatusCode, ErrUnauthorized
-	case resp.StatusCode == http.StatusNotFound:
+	case resp.StatusCode == http.StatusNotFound && e.Code == "not_found":
 		return nil, resp.StatusCode, ErrUnknownJob
+	case resp.StatusCode == http.StatusNotFound:
+		return nil, resp.StatusCode, fmt.Errorf("%w for %s %s. %s", ErrWrongAddress, method, path, api.AddressHint)
 	}
 	return nil, resp.StatusCode, fmt.Errorf("cloud: %s %s: %d %s %s", method, path, resp.StatusCode, e.Code, e.Message)
 }

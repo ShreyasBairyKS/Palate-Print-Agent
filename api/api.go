@@ -16,6 +16,12 @@ const (
 	PathOutcome  = "/v1/jobs/{id}/outcome" // POST  OutcomeRequest -> 204
 )
 
+// AddressHint is added to errors that mean the server doesn't know the path
+// the agent asked for, which almost always means the server address in the
+// config is wrong.
+const AddressHint = "Check the server address: use the one Palate gave you, including any path it has " +
+	"(for example https://host/api/print-agent), and without /v1 on the end, because the agent adds /v1 itself."
+
 // MaxResponseBytes is the most the agent will read from any response. A
 // larger body is an attack or a bug; the agent must refuse it. It leaves room
 // for a few HTML documents (MaxDocumentBytes each) in one poll response.
