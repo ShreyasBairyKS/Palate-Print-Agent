@@ -41,7 +41,7 @@ func TestStatusViewPrinterDown(t *testing.T) {
 		t.Fatalf("view = %+v", v)
 	}
 	l := v.Lines[1]
-	if !l.Bad || !strings.Contains(l.Text, "NOT WORKING: out of paper") || !strings.Contains(l.Text, clock(since, now)) || !strings.Contains(l.Text, "go to Tandoor") {
+	if !l.Bad || !strings.Contains(l.Text, "NOT WORKING: out of paper") || !strings.Contains(l.Text, clock(since, now)) || !strings.Contains(l.Text, "go to Tandoor") || !strings.Contains(l.Text, "(error code: paper out)") {
 		t.Fatalf("line = %q", l.Text)
 	}
 	if !strings.Contains(v.Advice, "new paper roll in Pass") || !strings.Contains(v.Detail, "2 tickets waiting") {

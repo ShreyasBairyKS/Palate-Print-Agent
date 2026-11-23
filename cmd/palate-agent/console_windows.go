@@ -3,7 +3,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -39,4 +42,43 @@ func relaunchElevated(args []string) error {
 	params, _ := windows.UTF16PtrFromString(strings.Join(quoted, " "))
 	wd, _ := windows.UTF16PtrFromString(dir)
 	return windows.ShellExecute(0, verb, file, params, wd, windows.SW_NORMAL)
+}
+
+// runVersion runs another copy of the agent's "version" command, without a
+// console window flashing up, and returns what it printed.
+func runVersion(exe string) (string, error) {
+	cmd := exec.Command(exe, "version")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
+}
+
+// removeAtRestart asks Windows to delete a file, or an empty folder, at the
+// next restart: a running program can't delete itself.
+func removeAtRestart(path string) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err == nil {
+		windows.MoveFileEx(p, nil, windows.MOVEFILE_DELAY_UNTIL_REBOOT)
+	}
+}
+
+// windowsVersion is "Windows 10.0.26200" (Windows 11 reports 10.0 too; its
+// build is 22000 or later).
+func windowsVersion() string {
+	v := windows.RtlGetVersion()
+	s := fmt.Sprintf("Windows %d.%d.%d", v.MajorVersion, v.MinorVersion, v.BuildNumber)
+	if v.MajorVersion == 10 && v.BuildNumber >= 22000 {
+		s += " (Windows 11)"
+	}
+	return s
+}
+
+// desktopDir is the signed-in person's Desktop (which OneDrive may have
+// moved).
+func desktopDir() string {
+	if d, err := windows.KnownFolderPath(windows.FOLDERID_Desktop, 0); err == nil {
+		return d
+	}
+	h, _ := os.UserHomeDir()
+	return filepath.Join(h, "Desktop")
 }

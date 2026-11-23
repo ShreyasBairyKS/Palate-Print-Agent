@@ -18,14 +18,14 @@ func (a *Agent) Status() status.File {
 	started := a.started
 	a.mu.Unlock()
 	f := status.File{UpdatedAt: time.Now(), StartedAt: started, AgentVersion: Version, Till: a.Till,
-		Server: conn, QueueDepth: a.Queue.Depth()}
+		ServerURL: a.serverURL, Server: conn, QueueDepth: a.Queue.Depth()}
 	states := map[string]int{}
 	qs := a.Queue.States()
 	for i, s := range qs {
 		states[s.ID] = i
 	}
 	for _, p := range a.cfgs {
-		sp := status.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Where: p.Address, Width: p.Width, Backup: p.Backup, State: "unknown"}
+		sp := status.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Where: p.Address, Width: p.Width, Dots: p.Dots, Backup: p.Backup, State: "unknown"}
 		if p.Kind == "usb" {
 			sp.Where = p.PrinterName
 		}

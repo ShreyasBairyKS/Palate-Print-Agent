@@ -2,16 +2,29 @@
 
 package main
 
-// The setup window: a small native Windows window, drawn with Windows' own
-// controls and theme. It adds no dependency, opens no port and starts no
-// other program; every step it takes is the same code the console setup and
-// the "printer" commands use (setupflow.go).
+// The print agent's window: one small native Windows window, drawn with
+// Windows' own controls and theme, for everything a restaurant does with the
+// agent. Before it's installed it walks through setup; afterwards the same
+// window shows whether the printers are working (refreshed every two
+// seconds), and changes them, pairs, updates, sends a report to support and
+// removes the agent.
+//
+// Opened on an installed till without administrator rights (the usual
+// double-click), it shows everything and can test-print, but its buttons that
+// change something carry Windows' shield: pressing one asks Windows for
+// permission, and the window comes back in the same place, with permission,
+// already doing what was pressed.
+//
+// It adds no dependency, opens no port and starts no other program; every
+// step it takes is the same code the console setup and the "printer"
+// commands use (setupflow.go).
 
 import (
 	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -20,10 +33,11 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/ShreyasBairyKS/Palate-Print-Agent/agent"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/config"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/job"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/pair"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/printer/discover"
+	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
 
@@ -67,6 +81,21 @@ var (
 	pCreateActCtx      = kernel32.NewProc("CreateActCtxW")
 	pActivateActCtx    = kernel32.NewProc("ActivateActCtx")
 	pInitCommonCtrls   = comctl32.NewProc("InitCommonControlsEx")
+	pOpenClipboard     = user32.NewProc("OpenClipboard")
+	pEmptyClipboard    = user32.NewProc("EmptyClipboard")
+	pSetClipboardData  = user32.NewProc("SetClipboardData")
+	pCloseClipboard    = user32.NewProc("CloseClipboard")
+	pGlobalAlloc       = kernel32.NewProc("GlobalAlloc")
+	pGlobalLock        = kernel32.NewProc("GlobalLock")
+	pGlobalUnlock      = kernel32.NewProc("GlobalUnlock")
+	pGlobalFree        = kernel32.NewProc("GlobalFree")
+	pMoveMemory        = kernel32.NewProc("RtlMoveMemory")
+	pSetTimer          = user32.NewProc("SetTimer")
+	pKillTimer         = user32.NewProc("KillTimer")
+	pFlashWindowEx     = user32.NewProc("FlashWindowEx")
+	pInvalidateRect    = user32.NewProc("InvalidateRect")
+	pGetWindowRect     = user32.NewProc("GetWindowRect")
+	pSetWindowPos      = user32.NewProc("SetWindowPos")
 )
 
 const (
@@ -90,11 +119,30 @@ const (
 	emSetSel, emReplaceSel, emSetReadOnly    = 0xB1, 0xC2, 0xCF
 	emSetCueBanner                           = 0x1501
 	enChange, lbnDblClk                      = 0x300, 2
+	cbnSelChange                             = 1
 	mbOK, mbYesNo, mbIconErr, mbIconWarn     = 0x0, 0x4, 0x10, 0x30
-	mbIconInfo, idYes                        = 0x40, 6
+	mbIconInfo, idYes, mbDefButton2          = 0x40, 6, 0x100
 	colorWindow                              = 5
 	wmUser                                   = wmApp + 1
+	wmTimer, bcmSetShield                    = 0x113, 0x160C
+
+	refreshTimer = 1        // reads the agent's status again
+	handOffTimer = 2        // closes this copy once the one with permission is up
+	refreshEvery = 2000     // ms
+	handOffAfter = 2000     // ms
+	rgbRed       = 0x0000B4 // COLORREF is 0x00BBGGRR
+	rgbGreen     = 0x00701A
+	rgbDarkRed   = 0x0000B0
+	windowTitle  = "Palate print agent"
 )
+
+type flashInfo struct {
+	cbSize    uint32
+	hwnd      uintptr
+	dwFlags   uint32
+	uCount    uint32
+	dwTimeout uint32
+}
 
 // Control ids.
 const (
@@ -124,6 +172,10 @@ const (
 	idFindSlips
 	idFindAdd
 	idFindClose
+	idDots
+	idServerChange
+	idSupport
+	idUninstall
 )
 
 type wndClassEx struct {
@@ -194,6 +246,55 @@ func messageBox(owner uintptr, text, title string, flags uintptr) int {
 	return int(r)
 }
 
+// notify shows a message box with no owner window.
+func notify(text string, bad bool) {
+	flags := uintptr(mbOK | mbIconInfo)
+	if bad {
+		flags = mbOK | mbIconErr
+	}
+	messageBox(0, text, "Palate print agent", flags)
+}
+
+// copyToClipboard puts text on the clipboard, for pasting into WhatsApp or
+// an email.
+func copyToClipboard(text string) error {
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\n", "\r\n")
+	u, err := windows.UTF16FromString(text)
+	if err != nil {
+		return err
+	}
+	opened := false
+	for i := 0; i < 10 && !opened; i++ { // another program may hold it for a moment
+		r, _, _ := pOpenClipboard.Call(0)
+		opened = r != 0
+		if !opened {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	if !opened {
+		return errors.New("the clipboard is busy")
+	}
+	defer pCloseClipboard.Call()
+	pEmptyClipboard.Call()
+	size := uintptr(len(u) * 2)
+	h, _, _ := pGlobalAlloc.Call(0x2, size) // GMEM_MOVEABLE
+	if h == 0 {
+		return errors.New("out of memory for the clipboard")
+	}
+	p, _, _ := pGlobalLock.Call(h)
+	if p == 0 {
+		pGlobalFree.Call(h)
+		return errors.New("couldn't use the clipboard")
+	}
+	pMoveMemory.Call(p, uintptr(unsafe.Pointer(&u[0])), size)
+	pGlobalUnlock.Call(h)
+	if r, _, err := pSetClipboardData.Call(13, h); r == 0 { // CF_UNICODETEXT
+		pGlobalFree.Call(h)
+		return fmt.Errorf("couldn't copy: %v", err)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 
 type guiPrinter struct {
@@ -203,20 +304,29 @@ type guiPrinter struct {
 
 type gui struct {
 	env       *setupEnv
+	opts      appOptions
+	readOnly  bool // installed, and opened without administrator rights: changes ask Windows first
 	installed bool // the service exists on this PC
 	paired    bool
 	state     string // service state, when installed
+	till      string // the till's name, from the status file
 	raw       *config.Config
 	printers  []guiPrinter
 	usb       []string
 	busy      bool
+	handedOff bool // a copy with administrator rights is taking over
 
-	dpi        int
-	font, bold uintptr
-	title      uintptr
-	hinst      uintptr
+	dpi             int
+	font, bold, big uintptr
+	title           uintptr
+	hinst           uintptr
 
-	main, server, list, add, edit, remove, test, find, code, codeLabel, install, status, subtitle uintptr
+	main, server, serverChange, list, add, edit, remove, test, find, code, codeLabel, install, status, subtitle uintptr
+	support, uninstall, headline, detail, advice, codeHint                                                      uintptr
+
+	// The last status shown, to flash the taskbar when something new breaks.
+	bad  bool
+	down map[string]bool
 
 	// Finding network printers, and the Find printers dialog while it's open.
 	searching, searched, identifying bool
@@ -228,10 +338,10 @@ type gui struct {
 	fAgain, fSlips, fAdd             uintptr
 
 	// The printer dialog, while it's open.
-	dlg, dName, dID, dNet, dIP, dUSB, dUSBList, dWidth, dBackup, dError uintptr
-	dEditing                                                            string // id of the printer being edited, or ""
-	dIDTouched, dSettingID                                              bool
-	dBackups                                                            []string
+	dlg, dName, dID, dNet, dIP, dUSB, dUSBList, dWidth, dDots, dBackup, dError uintptr
+	dEditing                                                                   string // id of the printer being edited, or ""
+	dIDTouched, dSettingID                                                     bool
+	dBackups                                                                   []string
 
 	// What the running agent last said about each printer, once installed.
 	live map[string]status.Printer
@@ -239,8 +349,6 @@ type gui struct {
 	mu    sync.Mutex
 	queue []func()
 }
-
-var theGUI *gui
 
 func (g *gui) s(v int) int { return v * g.dpi / 96 }
 
@@ -263,8 +371,10 @@ func (g *gui) drain() {
 	}
 }
 
-// runGUI shows the setup window until it is closed.
-func runGUI(e *setupEnv, ownConsole bool) error {
+// runGUI shows the print agent's window until it is closed.
+func runGUI(e *setupEnv, ownConsole bool, o appOptions) error {
+	// A window belongs to the thread that made it, and only that thread gets
+	// its messages: stay on one.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if ownConsole {
@@ -275,23 +385,23 @@ func runGUI(e *setupEnv, ownConsole bool) error {
 		pFreeConsole.Call()
 	}
 
-	g := &gui{env: e, dpi: 96}
-	theGUI = g
+	g := &gui{env: e, opts: o, dpi: 96, down: map[string]bool{}}
 	g.initUI()
 	g.load()
 	if err := g.register(map[string]func(hwnd, m, w, l uintptr) uintptr{
 		"PalateSetup": g.mainProc, "PalatePrinter": g.dlgProc, "PalateFind": g.findProc,
 	}); err != nil {
-		return fmt.Errorf("setup window: %v", err)
+		return fmt.Errorf("window: %v", err)
 	}
 
-	title := "Palate print agent setup"
-	if g.installed {
-		title = "Palate print agent"
-	}
-	g.main = g.window("PalateSetup", title, 600, 640, 0)
+	g.main = g.window("PalateSetup", windowTitle, 600, 632, 0)
 	if g.main == 0 {
-		return errors.New("setup window: couldn't create the window")
+		return errors.New("window: couldn't create the window")
+	}
+	// Reopened with permission: in the same place as the copy it replaces.
+	var x, y int32
+	if _, err := fmt.Sscanf(o.at, "%d,%d", &x, &y); err == nil {
+		pSetWindowPos.Call(g.main, 0, uintptr(x), uintptr(y), 0, 0, 0x1|0x4) // SWP_NOSIZE|SWP_NOZORDER
 	}
 	g.build()
 	pShowWindow.Call(g.main, 5)
@@ -336,6 +446,7 @@ func (g *gui) initUI() {
 	g.hinst = h
 	g.font = g.makeFont(9, 400)
 	g.bold = g.makeFont(9, 600)
+	g.big = g.makeFont(13, 600)
 	g.title = g.makeFont(15, 600)
 }
 
@@ -434,9 +545,15 @@ func (g *gui) load() {
 	if info, err := g.env.status(); err == nil {
 		g.installed, g.state = true, info.State
 	}
+	g.raw = &config.Config{}
+	if g.installed && !service.IsElevated() {
+		// The settings need administrator rights: the printers, address and
+		// pairing come from the status file the agent writes (refreshStatus).
+		g.readOnly, g.paired = true, true
+		return
+	}
 	all, _ := g.env.usbList()
 	g.usb = realPrinters(all)
-	g.raw = &config.Config{}
 	if c, err := config.Read(g.env.cfgPath); err == nil {
 		g.raw = c
 		for _, p := range c.Printers {
@@ -462,53 +579,58 @@ func (g *gui) syncRaw() {
 
 func (g *gui) build() {
 	m := g.main
-	g.label(m, "Palate print agent", 24, 16, 400, 34, g.title)
-	sub := "Connect this till's printers to Palate. Version " + agent.Version + "."
-	if g.installed {
-		sub = fmt.Sprintf("Installed on this PC and %s.", g.state)
-		if !g.paired {
-			sub = "Installed on this PC, but not paired with Palate yet."
-		}
-	}
-	g.subtitle = g.label(m, sub, 24, 52, 552, 20, 0)
+	g.label(m, "Palate print agent", 24, 14, 552, 34, g.title)
+	g.subtitle = g.label(m, g.subtitleText(), 24, 50, 552, 20, 0)
 
-	g.label(m, "1   Palate's server address", 24, 88, 552, 20, g.bold)
-	g.server = g.editBox(m, idServer, 24, 110, 552, "https://", 0)
-	setText(g.server, g.raw.Server)
-	if g.installed {
-		send(g.server, emSetReadOnly, 1, 0)
-	}
+	// How it is: whether the printers work, or what's left to set up.
+	g.headline = g.label(m, "Set up this till", 24, 78, 552, 30, g.big)
+	g.detail = g.label(m, "Add this till's printers (each prints a test slip), type the pairing code from the Palate portal, then press Install and start.", 24, 110, 552, 38, 0)
 
-	g.label(m, "2   Printers on this till", 24, 152, 552, 20, g.bold)
-	g.list = g.ctl(m, "LISTBOX", "", wsTabStop|wsVScroll|lbsNotify|lbsNoIntegral, wsExClientEdge, idPrinters, 24, 174, 552, 148, 0)
-	g.add = g.button(m, "Add printer...", idAdd, 24, 330, 120, false)
-	g.edit = g.button(m, "Edit...", idEdit, 150, 330, 90, false)
-	g.remove = g.button(m, "Remove", idRemove, 246, 330, 90, false)
-	g.test = g.button(m, "Test print", idTest, 342, 330, 100, false)
-	g.find = g.button(m, "Find printers...", idFind, 448, 330, 128, false)
+	g.label(m, "Printers", 24, 152, 552, 20, g.bold)
+	g.list = g.ctl(m, "LISTBOX", "", wsTabStop|wsVScroll|lbsNotify|lbsNoIntegral, wsExClientEdge, idPrinters, 24, 174, 552, 132, 0)
+	g.add = g.button(m, "Add printer...", idAdd, 24, 314, 124, false)
+	g.edit = g.button(m, "Edit...", idEdit, 154, 314, 84, false)
+	g.remove = g.button(m, "Remove", idRemove, 244, 314, 90, false)
+	g.test = g.button(m, "Test print", idTest, 340, 314, 96, false)
+	g.find = g.button(m, "Find printers...", idFind, 442, 314, 134, false)
+	g.advice = g.label(m, "", 24, 352, 552, 40, 0)
 
-	g.codeLabel = g.label(m, "3   Pairing code from the Palate portal (\"Add a till\")", 24, 378, 552, 20, g.bold)
-	g.code = g.editBox(m, idCode, 24, 400, 200, "K7Q2-M9XD", esUppercase)
-
-	btn := "Install and start"
+	g.label(m, "Palate's server", 24, 404, 120, 20, g.bold)
+	g.server = g.editBox(m, idServer, 150, 400, 314, "https://", esReadOnly)
+	g.serverChange = g.button(m, "Change...", idServerChange, 472, 398, 104, false)
 	switch {
-	case g.installed && g.paired:
-		btn = "Close"
+	case g.raw.Server != "":
+		setText(g.server, g.raw.Server)
+	case g.readOnly:
+		// An agent older than this one doesn't report its address.
+		setText(g.server, "(press Change... to see it)")
+	default:
+		setText(g.server, config.DefaultServer)
+	}
+
+	g.codeLabel = g.label(m, "Pairing code", 24, 444, 120, 20, g.bold)
+	g.code = g.editBox(m, idCode, 150, 440, 160, "K7Q2-M9XD", esUppercase)
+	g.codeHint = g.label(m, "from the Palate portal (\"Add a till\")", 318, 444, 258, 20, 0)
+
+	g.install = g.button(m, "Install and start", idInstall, 24, 484, 200, true)
+	g.support = g.button(m, "Send to support...", idSupport, 270, 484, 150, false)
+	g.uninstall = g.button(m, "Remove from this PC...", idUninstall, 426, 484, 150, false)
+	if !g.installed {
+		pShowWindow.Call(g.uninstall, 0)
+	}
+	g.status = g.ctl(m, "EDIT", "", wsVScroll|esMultiline|esReadOnly|esAutoVScroll, wsExClientEdge, idStatus, 24, 528, 552, 88, 0)
+
+	if g.readOnly {
+		// Windows' shield on everything that asks it for permission first.
+		for _, b := range []uintptr{g.add, g.edit, g.remove, g.find, g.serverChange, g.uninstall} {
+			send(b, bcmSetShield, 0, 1)
+		}
+		g.say("Buttons with a shield ask Windows for permission first; this window then reopens and carries on.")
+	}
+	switch {
 	case g.installed:
-		btn = "Pair and start"
-	}
-	g.install = g.button(m, btn, idInstall, 24, 446, 180, true)
-	if g.installed && g.paired {
-		pShowWindow.Call(g.codeLabel, 0)
-		pShowWindow.Call(g.code, 0)
-	}
-
-	g.label(m, "Progress", 24, 494, 552, 20, g.bold)
-	g.status = g.ctl(m, "EDIT", "", wsVScroll|esMultiline|esReadOnly|esAutoVScroll, wsExClientEdge, idStatus, 24, 516, 552, 104, 0)
-
-	if g.installed {
 		g.say("Changes to printers are test-printed, saved, and applied by restarting the service.")
-	} else {
+	default:
 		if _, err := g.env.edgeFind(); err != nil {
 			g.say("Note: Microsoft Edge wasn't found, so customer bills can't print until it's installed.")
 		}
@@ -518,14 +640,329 @@ func (g *gui) build() {
 	}
 	if g.installed {
 		g.watchLive()
+		if c, ok := checkForUpdate(); ok && g.opts.then != "update" {
+			g.later(func() { g.offerUpdate(c) })
+		}
 	}
 	g.refreshList()
+	g.syncPrimary()
 	if !g.installed && len(g.printers) == 0 {
 		g.autoSearch()
 	}
-	if g.raw.Server == "" {
-		pSetFocus.Call(g.server)
+	if g.opts.then != "" {
+		g.later(g.carryOn)
 	}
+}
+
+// subtitleText is the line under the title: the till, and this program's
+// version and build date.
+func (g *gui) subtitleText() string {
+	v := versionLabel()
+	if g.till != "" {
+		return "Till " + g.till + "   ·   " + v
+	}
+	return strings.ToUpper(v[:1]) + v[1:]
+}
+
+// primary is what the main button does now.
+func (g *gui) primary() string {
+	switch {
+	case !g.installed:
+		return "Install and start"
+	case !g.paired:
+		return "Pair and start"
+	case g.serverChanged():
+		return "Pair with new server"
+	case g.state != "" && g.state != "running" && g.state != "starting" && g.state != "stopping":
+		return "Start printing"
+	}
+	return "Close"
+}
+
+// syncPrimary labels the main button, and shows the pairing code box when
+// the button needs a code.
+func (g *gui) syncPrimary() {
+	label := g.primary()
+	if getText(g.install) != label {
+		setText(g.install, label)
+	}
+	show := uintptr(0)
+	if label == "Install and start" || label == "Pair and start" || label == "Pair with new server" {
+		show = 5
+	}
+	for _, h := range []uintptr{g.codeLabel, g.code, g.codeHint} {
+		pShowWindow.Call(h, show)
+	}
+	send(g.install, bcmSetShield, 0, boolArg(g.readOnly && label != "Close"))
+}
+
+// refreshStatus reads what the running agent last wrote, and shows it: the
+// headline (green when all's well, red when not), the connection, the
+// printers' states and what to do about a problem. A printer that has just
+// gone down, or a new problem, flashes the window in the taskbar.
+func (g *gui) refreshStatus() {
+	if !g.installed {
+		return
+	}
+	svc := "unknown"
+	switch info, err := g.env.status(); {
+	case err == nil:
+		svc, g.state = info.State, info.State
+	case errors.Is(err, service.ErrNotInstalled):
+		svc = ""
+	}
+	f, err := status.Read(status.PathFor(g.env.cfgPath))
+	v := describeStatus(f, err, svc, time.Now())
+	if err == nil && f.Till != g.till {
+		g.till = f.Till
+		setText(g.subtitle, g.subtitleText())
+	}
+	setText(g.headline, v.Headline)
+	setText(g.detail, v.Detail)
+	setText(g.advice, v.Advice)
+	title := windowTitle
+	if v.Bad {
+		title += " — " + v.Headline
+	}
+	setText(g.main, title)
+
+	listChanged := g.readLive()
+	if g.readOnly && err == nil && g.fromStatus(f) {
+		listChanged = true
+	}
+	if listChanged {
+		g.refreshList()
+	}
+	g.syncPrimary()
+
+	alarm := v.Bad && !g.bad
+	down := map[string]bool{}
+	for _, n := range v.Down {
+		down[n] = true
+		if !g.down[n] {
+			alarm = true
+		}
+	}
+	g.bad, g.down = v.Bad, down
+	if alarm {
+		fi := flashInfo{hwnd: g.main, dwFlags: 0x3 | 0xC} // caption and taskbar, until the window is brought forward
+		fi.cbSize = uint32(unsafe.Sizeof(fi))
+		pFlashWindowEx.Call(uintptr(unsafe.Pointer(&fi)))
+	}
+	// Repaint the headline and advice in their new colours.
+	pInvalidateRect.Call(g.headline, 0, 1)
+	pInvalidateRect.Call(g.advice, 0, 1)
+}
+
+// fromStatus takes the printers, the server address and whether the till is
+// paired from the status file, for a window without permission to read the
+// settings. It reports whether the printers changed.
+func (g *gui) fromStatus(f status.File) bool {
+	if f.ServerURL != "" && f.ServerURL != g.raw.Server {
+		g.raw.Server = f.ServerURL
+		setText(g.server, f.ServerURL)
+	}
+	g.paired = !strings.Contains(f.Stopped, "pair") && !strings.Contains(f.Stopped, "unauthorized")
+	var ps []guiPrinter
+	for _, p := range f.Printers {
+		cp := config.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Width: p.Width, Dots: p.Dots, Backup: p.Backup}
+		if p.Kind == "usb" {
+			cp.PrinterName = p.Where
+		} else {
+			cp.Address = p.Where
+		}
+		gp := guiPrinter{p: cp}
+		if i := g.index(p.ID); i >= 0 {
+			gp.test = g.printers[i].test
+		}
+		ps = append(ps, gp)
+	}
+	changed := len(ps) != len(g.printers)
+	for i := range ps {
+		if !changed && ps[i] != g.printers[i] {
+			changed = true
+		}
+	}
+	g.printers = ps
+	g.syncRaw()
+	return changed
+}
+
+// elevate asks Windows for permission to change things, by opening this
+// window again with administrator rights, in the same place, set to do
+// action first (carryOn). This copy closes once that one is up. Turned down,
+// nothing changes.
+func (g *gui) elevate(action, code string) {
+	if g.busy || g.handedOff {
+		return
+	}
+	args := []string{"setup", "-gui", "-config", g.env.cfgPath, "-then", action}
+	if code != "" {
+		args = append(args, "-code", code)
+	}
+	var r rect
+	pGetWindowRect.Call(g.main, uintptr(unsafe.Pointer(&r)))
+	args = append(args, "-at", fmt.Sprintf("%d,%d", r.left, r.top))
+	if err := relaunchElevated(args); err != nil {
+		if errors.Is(err, windows.ERROR_CANCELLED) {
+			g.say("Windows didn't give permission, so nothing changed.")
+			return
+		}
+		messageBox(g.main, "Windows couldn't give this window permission to change things: "+err.Error()+
+			"\n\nRight-click palate-agent.exe and choose \"Run as administrator\".", windowTitle, mbOK|mbIconErr)
+		return
+	}
+	g.handedOff = true
+	g.say("Opening with permission...")
+	pSetTimer.Call(g.main, handOffTimer, handOffAfter, 0)
+}
+
+// carryOn does what was pressed before this window reopened with
+// administrator rights.
+func (g *gui) carryOn() {
+	action, id, _ := strings.Cut(g.opts.then, ":")
+	pick := func() int {
+		i := g.index(id)
+		if i >= 0 {
+			send(g.list, lbSetCurSel, uintptr(i), 0)
+			g.setBusy(g.busy)
+		}
+		return i
+	}
+	switch action {
+	case "add":
+		g.openPrinter(-1)
+	case "find":
+		g.openFind()
+	case "edit":
+		if i := pick(); i >= 0 {
+			g.openPrinter(i)
+		}
+	case "remove":
+		if pick() >= 0 {
+			g.removePrinter()
+		}
+	case "server":
+		g.changeServer()
+	case "pair", "start":
+		if g.opts.code != "" {
+			setText(g.code, g.opts.code)
+		}
+		switch label := g.primary(); {
+		case label == "Close":
+			g.say("The print agent is already running.")
+		case label == "Start printing" || g.opts.code != "":
+			g.installClicked()
+		default:
+			g.say("Type the pairing code from the Palate portal (\"Add a till\"), then press " + label + ".")
+			pSetFocus.Call(g.code)
+		}
+	case "uninstall":
+		g.removeClicked()
+	case "update":
+		if c, ok := checkForUpdate(); ok {
+			g.runUpdate(c)
+		}
+	}
+}
+
+// changeServer lets the address be typed. It's read-only until asked, so
+// nobody changes it by accident.
+func (g *gui) changeServer() {
+	send(g.server, emSetReadOnly, 0, 0)
+	pSetFocus.Call(g.server)
+	send(g.server, emSetSel, 0, ^uintptr(0))
+	enable(g.serverChange, false)
+}
+
+// typedServer is the address in the box, tidied (https:// and
+// /api/print-agent added when they're missing), and shows it tidied.
+func (g *gui) typedServer() string {
+	s := config.NormalizeServer(getText(g.server))
+	if s != getText(g.server) {
+		setText(g.server, s)
+	}
+	return s
+}
+
+// offerUpdate asks to replace the installed program with this one.
+func (g *gui) offerUpdate(c buildCompare) {
+	icon := uintptr(mbIconInfo)
+	if c.Older {
+		icon = mbIconWarn
+	}
+	if g.busy || messageBox(g.main, updateOffer(c), "Palate print agent", mbYesNo|icon) != idYes {
+		return
+	}
+	if g.readOnly {
+		g.elevate("update", "")
+		return
+	}
+	g.runUpdate(c)
+}
+
+// runUpdate replaces the installed program with this one, in the background.
+func (g *gui) runUpdate(c buildCompare) {
+	g.setBusy(true)
+	g.say("Updating the installed program...")
+	go func() {
+		err := updateProgram(g.env.cfgPath, func(s string) { g.later(func() { g.say("  " + s) }) })
+		g.later(func() {
+			g.setBusy(false)
+			if err != nil {
+				pe := explain(err)
+				g.say("Problem: " + pe.String())
+				messageBox(g.main, "The update didn't finish.\n\n"+pe.Box(), "Palate print agent", mbOK|mbIconErr)
+				return
+			}
+			g.refreshStatus()
+			messageBox(g.main, "Updated to "+versionLabel()+".\n\nPrinters, settings and pairing are as they were.", "Palate print agent", mbOK|mbIconInfo)
+		})
+	}()
+}
+
+// removeClicked removes the agent from this PC, after asking twice: once to
+// be sure, and once whether to keep the settings for a reinstall.
+func (g *gui) removeClicked() {
+	if g.busy {
+		return
+	}
+	if g.readOnly {
+		g.elevate("uninstall", "")
+		return
+	}
+	if messageBox(g.main, "Remove the Palate print agent from this PC?\n\nTickets and bills stop printing on this till until it's installed again.",
+		"Palate print agent", mbYesNo|mbIconWarn) != idYes {
+		return
+	}
+	dataDir := filepath.Dir(g.env.cfgPath)
+	deleteData := messageBox(g.main, "Also delete this till's printers, settings and pairing?\n\n"+
+		"No: keep them in "+dataDir+", so installing again later is quick (recommended).\n\n"+
+		"Yes: delete everything, for example before the PC is given away.",
+		"Palate print agent", mbYesNo|mbIconWarn|mbDefButton2) == idYes
+	g.setBusy(true)
+	g.say("Removing the print agent...")
+	go func() {
+		kept, err := removeAgent(g.env.cfgPath, deleteData)
+		g.later(func() {
+			g.setBusy(false)
+			if err != nil {
+				pe := explain(err)
+				g.say("Problem: " + pe.String())
+				messageBox(g.main, pe.Box(), "Palate print agent", mbOK|mbIconErr)
+				if _, serr := g.env.status(); serr == nil {
+					return // still installed
+				}
+			}
+			msg := "The Palate print agent is removed from this PC."
+			if kept != "" {
+				msg += "\n\nIts printers, settings and pairing are kept in " + kept + ". Double-click palate-agent.exe to install it again."
+			}
+			msg += "\n\nIf this till won't be used again, remove it in the Palate portal too."
+			messageBox(g.main, msg, "Palate print agent", mbOK|mbIconInfo)
+			pDestroyWindow.Call(g.main)
+		})
+	}()
 }
 
 func (g *gui) say(line string) {
@@ -564,7 +1001,7 @@ func (g *gui) refreshList() {
 		if p.Backup != "" {
 			backup = "   ·   backup " + p.Backup
 		}
-		line := fmt.Sprintf("%s   (%s)   ·   %s   ·   %d mm%s%s", p.Name, p.ID, where, p.Width, backup, mark)
+		line := fmt.Sprintf("%s   (%s)   ·   %s   ·   %s%s%s", p.Name, p.ID, where, p.Paper(), backup, mark)
 		send(g.list, lbAddString, 0, uintptr(unsafe.Pointer(wstr(line))))
 	}
 	if sel >= len(g.printers) {
@@ -595,9 +1032,34 @@ func (g *gui) setBusy(b bool) {
 	enable(g.test, !b && has)
 	enable(g.install, !b)
 	enable(g.code, !b)
-	if !g.installed {
-		enable(g.server, !b)
+	enable(g.server, !b)
+	enable(g.support, !b)
+	enable(g.uninstall, !b)
+}
+
+// serverChanged reports whether the address box differs from the saved one.
+func (g *gui) serverChanged() bool {
+	if g.readOnly {
+		return false // it can't be typed in until the window has permission
 	}
+	return !sameServer(config.NormalizeServer(getText(g.server)), g.raw.Server)
+}
+
+// serverEdited follows the address box on an installed, paired till: a new
+// address needs a pairing code from that server, so the code box appears
+// and the button says what it will do.
+func (g *gui) serverEdited() {
+	if g.install != 0 {
+		g.syncPrimary()
+	}
+}
+
+// selectedID is the selected printer's id, or "".
+func (g *gui) selectedID() string {
+	if i := g.selected(); i >= 0 {
+		return g.printers[i].p.ID
+	}
+	return ""
 }
 
 func (g *gui) mainProc(hwnd, m, w, l uintptr) uintptr {
@@ -605,13 +1067,25 @@ func (g *gui) mainProc(hwnd, m, w, l uintptr) uintptr {
 	case wmCommand:
 		id, code := int(w&0xFFFF), int(w>>16)
 		switch {
+		case id == idAdd && g.readOnly:
+			g.elevate("add", "")
 		case id == idAdd:
 			g.openPrinter(-1)
+		case id == idFind && g.readOnly:
+			g.elevate("find", "")
 		case id == idFind:
 			g.openFind()
 		case id == idEdit || (id == idPrinters && code == lbnDblClk):
 			if i := g.selected(); i >= 0 && !g.busy {
-				g.openPrinter(i)
+				if g.readOnly {
+					g.elevate("edit:"+g.selectedID(), "")
+				} else {
+					g.openPrinter(i)
+				}
+			}
+		case id == idRemove && g.readOnly:
+			if p := g.selectedID(); p != "" {
+				g.elevate("remove:"+p, "")
 			}
 		case id == idRemove:
 			g.removePrinter()
@@ -621,30 +1095,52 @@ func (g *gui) mainProc(hwnd, m, w, l uintptr) uintptr {
 			}
 		case id == idInstall:
 			g.installClicked()
+		case id == idServerChange && g.readOnly:
+			g.elevate("server", "")
+		case id == idServerChange:
+			g.changeServer()
+		case id == idSupport:
+			sendToSupport(g, g.env.cfgPath)
+		case id == idUninstall:
+			g.removeClicked()
+		case id == idServer && code == enChange:
+			g.serverEdited()
 		case id == idPrinters:
 			g.setBusy(g.busy)
 		}
 		return 0
 	case wmCtlColorStatic:
 		pSetBkMode.Call(w, 1)
+		switch {
+		case l == g.headline && g.installed && g.bad:
+			pSetTextColor.Call(w, rgbRed)
+		case l == g.headline && g.installed:
+			pSetTextColor.Call(w, rgbGreen)
+		case l == g.advice:
+			pSetTextColor.Call(w, rgbDarkRed)
+		}
 		b, _, _ := pGetSysColorBrush.Call(colorWindow)
 		return b
 	case wmUser:
 		g.drain()
 		return 0
 	case wmTimer:
-		if g.readLive() {
-			g.refreshList()
+		if w == handOffTimer {
+			pDestroyWindow.Call(hwnd)
+		} else {
+			g.refreshStatus()
 		}
 		return 0
 	case wmClose:
 		if g.busy {
-			messageBox(hwnd, "Setup is still working. Wait for it to finish, then close the window.", "Palate print agent", mbOK|mbIconInfo)
+			messageBox(hwnd, "Still working. Wait for it to finish, then close the window.", "Palate print agent", mbOK|mbIconInfo)
 			return 0
 		}
 		pDestroyWindow.Call(hwnd)
 		return 0
 	case wmDestroy:
+		pKillTimer.Call(hwnd, refreshTimer)
+		pKillTimer.Call(hwnd, handOffTimer)
 		pPostQuitMessage.Call(0)
 		return 0
 	}
@@ -684,7 +1180,7 @@ func (g *gui) testPrinter(id string, then func(err error)) {
 					g.say("  " + p.Name + ": test slip printed. Check it's readable and the paper was cut.")
 				} else {
 					g.printers[j].test = err.Error()
-					g.say("  " + p.Name + ": the test print failed: " + err.Error())
+					g.say("  " + p.Name + ": the test print failed. " + explain(err).String())
 				}
 			}
 			g.setBusy(false)
@@ -760,18 +1256,28 @@ func (g *gui) saveInstalledChange(what string) {
 }
 
 func (g *gui) installClicked() {
+	label := g.primary()
 	switch {
-	case g.installed && g.paired:
+	case label == "Close":
 		pDestroyWindow.Call(g.main)
+		return
+	case g.readOnly && label == "Start printing":
+		g.elevate("start", "")
+		return
+	case g.readOnly:
+		g.elevate("pair", strings.ToUpper(strings.TrimSpace(getText(g.code))))
+		return
+	case label == "Start printing":
+		g.startAgent()
 		return
 	case g.installed:
 		g.pairAndStart()
 		return
 	}
-	server := strings.TrimSpace(getText(g.server))
+	server := g.typedServer()
 	if err := config.CheckServer(server); err != nil {
 		messageBox(g.main, "Palate's server address: "+err.Error()+".", "Palate print agent", mbOK|mbIconWarn)
-		pSetFocus.Call(g.server)
+		g.changeServer()
 		return
 	}
 	if len(g.printers) == 0 {
@@ -802,11 +1308,9 @@ func (g *gui) installClicked() {
 		g.later(func() {
 			g.setBusy(false)
 			if err != nil {
-				g.say("Problem: " + err.Error())
-				if errors.Is(err, config.ErrNeedAdmin) || strings.Contains(err.Error(), "administrator") {
-					g.say("Close this window and double-click palate-agent.exe again, choosing Yes when Windows asks.")
-				}
-				messageBox(g.main, err.Error(), "Palate print agent", mbOK|mbIconErr)
+				pe := explain(err)
+				g.say("Problem: " + pe.String())
+				messageBox(g.main, pe.Box(), "Palate print agent", mbOK|mbIconErr)
 				if info, serr := g.env.status(); serr == nil {
 					g.becomeInstalled(info.State, paired)
 				}
@@ -820,11 +1324,30 @@ func (g *gui) installClicked() {
 	}()
 }
 
-// watchLive shows the running agent's view of each printer in the list,
-// read again every two seconds.
+// startAgent starts the installed, paired agent.
+func (g *gui) startAgent() {
+	g.setBusy(true)
+	g.say("Starting the print agent...")
+	go func() {
+		err := g.env.start()
+		g.later(func() {
+			g.setBusy(false)
+			if err != nil {
+				pe := explain(err)
+				g.say("Problem: " + pe.String())
+				messageBox(g.main, "The print agent didn't start.\n\n"+pe.Box(), windowTitle, mbOK|mbIconErr)
+			} else {
+				g.say("  Running. Tickets and bills print as soon as Palate sends them.")
+			}
+			g.refreshStatus()
+		})
+	}()
+}
+
+// watchLive shows the running agent's status, read again every two seconds.
 func (g *gui) watchLive() {
-	g.readLive()
-	pSetTimer.Call(g.main, monitorTimer, refreshEvery, 0)
+	g.refreshStatus()
+	pSetTimer.Call(g.main, refreshTimer, refreshEvery, 0)
 }
 
 // readLive reads the status file, and reports whether anything shown changed.
@@ -847,19 +1370,14 @@ func (g *gui) readLive() bool {
 }
 
 func (g *gui) becomeInstalled(state string, paired bool) {
-	if !g.installed {
-		defer g.watchLive()
-	}
+	first := !g.installed
 	g.installed, g.paired, g.state = true, paired, state
-	send(g.server, emSetReadOnly, 1, 0)
-	if paired {
-		setText(g.subtitle, "Installed on this PC and running.")
-		setText(g.install, "Close")
-		pShowWindow.Call(g.codeLabel, 0)
-		pShowWindow.Call(g.code, 0)
+	pShowWindow.Call(g.uninstall, 5)
+	g.syncPrimary()
+	if first {
+		g.watchLive()
 	} else {
-		setText(g.subtitle, "Installed on this PC, but not paired with Palate yet.")
-		setText(g.install, "Pair and start")
+		g.refreshStatus()
 	}
 }
 
@@ -870,25 +1388,52 @@ func (g *gui) pairAndStart() {
 		pSetFocus.Call(g.code)
 		return
 	}
-	cfg, err := config.Load(g.env.cfgPath)
-	if err != nil {
-		messageBox(g.main, err.Error(), "Palate print agent", mbOK|mbIconErr)
+	server := g.typedServer()
+	if err := config.CheckServer(server); err != nil {
+		messageBox(g.main, "Palate's server address: "+err.Error()+".", "Palate print agent", mbOK|mbIconWarn)
+		g.changeServer()
+		return
+	}
+	moving := g.serverChanged()
+	if moving && g.paired && messageBox(g.main, "Move this till from\n"+g.raw.Server+"\nto\n"+server+"?\n\n"+
+		"It pairs with the new server first. If that fails, nothing changes and the till keeps printing from the old one.",
+		"Palate print agent", mbYesNo|mbIconWarn) != idYes {
 		return
 	}
 	g.setBusy(true)
-	g.say("Pairing with Palate...")
+	g.say("Pairing with Palate at " + server + "...")
 	go func() {
-		dev, err := g.env.pair(cfg, code)
+		dev, moved, err := pairServer(g.env, server, code)
+		msg := ""
 		if err == nil {
-			g.later(func() { g.say("Paired as " + dev + ". Starting the print agent...") })
-			err = g.env.start()
+			if moved {
+				g.later(func() { g.say("Paired as " + dev + ". Saved the new address.") })
+			} else {
+				g.later(func() { g.say("Paired as " + dev + ".") })
+			}
+			// A running agent still holds the old credential (and address):
+			// restart it. A stopped one is started.
+			if info, serr := g.env.status(); serr == nil && info.State == "running" {
+				g.later(func() { g.say("Restarting the print agent...") })
+				msg = restartService(g.env.cfgPath)
+			} else {
+				g.later(func() { g.say("Starting the print agent...") })
+				err = g.env.start()
+			}
 		}
 		g.later(func() {
 			g.setBusy(false)
 			if err != nil {
-				g.say("Problem: " + err.Error())
-				messageBox(g.main, err.Error(), "Palate print agent", mbOK|mbIconErr)
+				pe := explain(err)
+				g.say("Problem: " + pe.String())
+				messageBox(g.main, pe.Box(), "Palate print agent", mbOK|mbIconErr)
 				return
+			}
+			if moved {
+				g.raw.Server = server
+			}
+			if msg != "" {
+				g.say("  " + msg)
 			}
 			g.say("Running. Tickets and bills print as soon as Palate sends them.")
 			g.becomeInstalled("running", true)
@@ -916,7 +1461,7 @@ func (g *gui) openPrinter(i int) {
 		g.dEditing = p.ID
 		title, ok = "Edit "+p.Name, "Save"
 	}
-	g.dlg = g.window("PalatePrinter", title, 440, 380, g.main)
+	g.dlg = g.window("PalatePrinter", title, 440, 416, g.main)
 	d := g.dlg
 	g.label(d, "Name, as the kitchen calls it", 24, 16, 392, 20, 0)
 	g.dName = g.editBox(d, idName, 24, 38, 392, "e.g. Tandoor, Pass, Bill", 0)
@@ -936,13 +1481,17 @@ func (g *gui) openPrinter(i int) {
 		enable(g.dUSB, false)
 	}
 
-	g.label(d, "Paper width", 24, 234, 150, 20, 0)
-	g.dWidth = g.ctl(d, "COMBOBOX", "", wsTabStop|cbsDropDownList, 0, idWidth, 180, 230, 120, 120, 0)
-	send(g.dWidth, cbAddString, 0, uintptr(unsafe.Pointer(wstr("80 mm"))))
-	send(g.dWidth, cbAddString, 0, uintptr(unsafe.Pointer(wstr("58 mm"))))
+	g.label(d, "Paper", 24, 234, 150, 20, 0)
+	g.dWidth = g.ctl(d, "COMBOBOX", "", wsTabStop|wsVScroll|cbsDropDownList, 0, idWidth, 180, 230, 236, 200, 0)
+	for _, ps := range paperSizes {
+		send(g.dWidth, cbAddString, 0, uintptr(unsafe.Pointer(wstr(ps.label))))
+	}
+	g.label(d, "Dots across", 24, 270, 150, 20, 0)
+	g.dDots = g.editBox(d, idDots, 180, 266, 80, "e.g. 640", 0)
+	g.label(d, "from its spec sheet", 268, 270, 148, 20, 0)
 
-	g.label(d, "Backup when it's down", 24, 270, 150, 20, 0)
-	g.dBackup = g.ctl(d, "COMBOBOX", "", wsTabStop|wsVScroll|cbsDropDownList, 0, idBackup, 180, 266, 236, 160, 0)
+	g.label(d, "Backup when it's down", 24, 306, 150, 20, 0)
+	g.dBackup = g.ctl(d, "COMBOBOX", "", wsTabStop|wsVScroll|cbsDropDownList, 0, idBackup, 180, 302, 236, 160, 0)
 	g.dBackups = []string{""}
 	send(g.dBackup, cbAddString, 0, uintptr(unsafe.Pointer(wstr("None"))))
 	for _, gp := range g.printers {
@@ -952,9 +1501,9 @@ func (g *gui) openPrinter(i int) {
 		}
 	}
 
-	g.dError = g.label(d, "", 24, 302, 392, 36, 0)
-	g.button(d, "Cancel", idCancel, 230, 338, 90, false)
-	g.button(d, ok, idOK, 326, 338, 90, true)
+	g.dError = g.label(d, "", 24, 338, 392, 36, 0)
+	g.button(d, "Cancel", idCancel, 230, 374, 90, false)
+	g.button(d, ok, idOK, 326, 374, 90, true)
 
 	// Fill in.
 	g.dIDTouched = i >= 0
@@ -978,11 +1527,12 @@ func (g *gui) openPrinter(i int) {
 		setText(g.dIP, strings.TrimSuffix(p.Address, ":9100"))
 		send(g.dUSBList, cbSetCurSel, 0, 0)
 	}
-	if p.Width == 58 {
-		send(g.dWidth, cbSetCurSel, 1, 0)
-	} else {
-		send(g.dWidth, cbSetCurSel, 0, 0)
+	if p.Width == 0 {
+		p.Width = 80
 	}
+	send(g.dWidth, cbSetCurSel, uintptr(paperIndex(p)), 0)
+	setText(g.dDots, fmt.Sprint(p.PrintDots()))
+	g.syncPaper()
 	send(g.dBackup, cbSetCurSel, 0, 0)
 	for k, id := range g.dBackups {
 		if id != "" && id == p.Backup {
@@ -994,6 +1544,47 @@ func (g *gui) openPrinter(i int) {
 	enable(g.main, false)
 	pShowWindow.Call(d, 5)
 	pSetFocus.Call(g.dName)
+}
+
+// paperSizes are the choices in the printer dialog's Paper list. The last
+// one has no dots: the person types them.
+var paperSizes = []struct {
+	label       string
+	width, dots int
+}{
+	{"80 mm (576 dots, most printers)", 80, 576},
+	{"58 mm (384 dots)", 58, 384},
+	{"80 mm, 512 dots (Epson TM-T88)", 80, 512},
+	{"112 mm (832 dots)", 80, 832},
+	{"Other: type the dots across", 0, 0},
+}
+
+// paperIndex is the Paper list entry for a printer.
+func paperIndex(p config.Printer) int {
+	for i, ps := range paperSizes {
+		if ps.dots != 0 && ps.width == p.Width && ps.dots == p.PrintDots() {
+			return i
+		}
+	}
+	return len(paperSizes) - 1
+}
+
+// syncPaper shows the chosen paper's dots, and lets them be typed only for
+// "Other".
+func (g *gui) syncPaper() {
+	k := int(int32(send(g.dWidth, cbGetCurSel, 0, 0)))
+	custom := k == len(paperSizes)-1
+	if !custom && k >= 0 && k < len(paperSizes) {
+		setText(g.dDots, fmt.Sprint(paperSizes[k].dots))
+	}
+	send(g.dDots, emSetReadOnly, boolArg(!custom), 0)
+}
+
+func boolArg(b bool) uintptr {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func (g *gui) syncConnection() {
@@ -1020,6 +1611,8 @@ func (g *gui) dlgProc(hwnd, m, w, l uintptr) uintptr {
 			g.printerOK()
 		case id == idNetwork || id == idUSB:
 			g.syncConnection()
+		case id == idWidth && code == cbnSelChange:
+			g.syncPaper()
 		case id == idName && code == enChange && !g.dIDTouched:
 			g.dSettingID = true
 			setText(g.dID, suggestID(getText(g.dName), len(g.printers)+1))
@@ -1045,8 +1638,20 @@ func (g *gui) dlgProc(hwnd, m, w, l uintptr) uintptr {
 
 func (g *gui) printerOK() {
 	in := printerInput{Name: getText(g.dName), ID: getText(g.dID), Width: 80}
-	if send(g.dWidth, cbGetCurSel, 0, 0) == 1 {
-		in.Width = 58
+	k := int(int32(send(g.dWidth, cbGetCurSel, 0, 0)))
+	if k < 0 || k >= len(paperSizes) {
+		k = 0
+	}
+	if ps := paperSizes[k]; ps.dots != 0 {
+		in.Width, in.Dots = ps.width, ps.dots
+	} else {
+		n, err := strconv.Atoi(strings.TrimSpace(getText(g.dDots)))
+		if err != nil || !job.ValidDots(n) {
+			setText(g.dError, fmt.Sprintf("Type how many dots across it prints: a multiple of 8 from %d to %d.", job.MinDots, job.MaxDots))
+			pSetFocus.Call(g.dDots)
+			return
+		}
+		in.Width, in.Dots = int(job.ClassFor(n)), n
 	}
 	if send(g.dUSB, bmGetCheck, 0, 0) == 1 {
 		in.USB = true
@@ -1079,7 +1684,7 @@ func (g *gui) printerOK() {
 	send(g.list, lbSetCurSel, uintptr(g.index(p.ID)), 0)
 	g.refreshList()
 
-	needsTest := editing == "" || p.Kind != before.Kind || p.Address != before.Address || p.PrinterName != before.PrinterName || p.Width != before.Width
+	needsTest := editing == "" || p.Kind != before.Kind || p.Address != before.Address || p.PrinterName != before.PrinterName || p.PrintDots() != before.PrintDots()
 	if !g.installed {
 		if needsTest {
 			g.testPrinter(p.ID, nil)
@@ -1096,7 +1701,7 @@ func (g *gui) printerOK() {
 		return
 	}
 	g.testPrinter(p.ID, func(err error) {
-		if err != nil && messageBox(g.main, "The test print failed:\n"+err.Error()+"\n\nSave this change anyway?", "Palate print agent", mbYesNo|mbIconWarn) != idYes {
+		if err != nil && messageBox(g.main, "The test print failed.\n\n"+explain(err).Box()+"\n\nSave this change anyway?", "Palate print agent", mbYesNo|mbIconWarn) != idYes {
 			// Put the printer back as it was.
 			if editing == "" {
 				g.printers = g.printers[:len(g.printers)-1]

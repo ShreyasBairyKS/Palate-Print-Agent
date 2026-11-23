@@ -22,6 +22,38 @@ const (
 
 func (w Width) Valid() bool { return w == Width58 || w == Width80 }
 
+// Dots is how many dots across the usual printer for this width prints: 384
+// on 58 mm, 576 on 80 mm (203 dpi heads).
+func (w Width) Dots() int {
+	if w == Width58 {
+		return 384
+	}
+	return 576
+}
+
+// A printer's paper width (58 or 80 mm) is the class Palate's server knows it
+// by; how many dots across it really prints depends on the model: 512 on
+// Epson's TM-T88 series and other 180 dpi 80 mm printers, 832 on 112 mm
+// printers. These bound what a printer may be set to.
+const (
+	MinDots = 256
+	MaxDots = 832
+)
+
+// ValidDots reports whether d dots across is a width the agent can print:
+// a multiple of 8 (raster bytes) from MinDots to MaxDots.
+func ValidDots(d int) bool { return d >= MinDots && d <= MaxDots && d%8 == 0 }
+
+// ClassFor is the paper class to report for a printer d dots across: 58 up
+// to 432 dots, 80 above (112 mm printers included, which the server doesn't
+// know as a class of their own).
+func ClassFor(d int) Width {
+	if d <= 432 {
+		return Width58
+	}
+	return Width80
+}
+
 func (w Width) String() string { return fmt.Sprintf("%dmm", int(w)) }
 
 // Job is one thing to print, as fetched from a JobSource: a station's ticket

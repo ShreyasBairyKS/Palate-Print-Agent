@@ -18,13 +18,19 @@ cd "$(dirname "$0")/.."
 version=$(sed -n 's/^const Version = "\(.*\)"/\1/p' agent/agent.go)
 name="palate-print-agent-$version"
 out="dist/$name"
-rm -rf "${out:?}" "dist/$name.zip"
+rm -rf "dist/$name.zip"
+# Empty the folder rather than fail when it can't be removed itself (an
+# Explorer window or OneDrive sync holding it open).
+rm -rf "${out:?}" 2>/dev/null || find "$out" -mindepth 1 -delete
 mkdir -p "$out/docs" "$out/examples"
 
-echo "building $name..."
+# When it was built: the setup and status windows show it, and an update
+# compares it, so two builds of one version can be told apart.
+built=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo "building $name ($built)..."
 for cmd in palate-agent mockpalate fakeprinter; do
   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-    go build -trimpath -ldflags "-s -w" -o "$out/$cmd.exe" "./cmd/$cmd"
+    go build -trimpath -ldflags "-s -w -X main.buildDate=$built" -o "$out/$cmd.exe" "./cmd/$cmd"
 done
 
 cp package/HOW-TO-USE.txt package/README-FIRST.md package/start-demo.ps1 "$out/"

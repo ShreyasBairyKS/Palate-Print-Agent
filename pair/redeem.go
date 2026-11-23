@@ -38,10 +38,7 @@ func Redeem(ctx context.Context, client *http.Client, server, code, agentName st
 	if resp.StatusCode != http.StatusOK {
 		var e api.Error
 		json.Unmarshal(data, &e)
-		if resp.StatusCode == http.StatusNotFound {
-			return "", fmt.Errorf("pairing: the server has nothing at %s (404). %s", api.PathPair, api.AddressHint)
-		}
-		return "", fmt.Errorf("pairing refused (%d %s): %s", resp.StatusCode, e.Code, e.Message)
+		return "", &RefusedError{Status: resp.StatusCode, Code: e.Code, Message: e.Message}
 	}
 	var pr api.PairResponse
 	if err := json.Unmarshal(data, &pr); err != nil || pr.Credential == "" {
@@ -51,4 +48,21 @@ func Redeem(ctx context.Context, client *http.Client, server, code, agentName st
 		return "", fmt.Errorf("pairing succeeded but the credential could not be saved: %w", err)
 	}
 	return pr.DeviceID, nil
+}
+
+// RefusedError is the server answering a pairing request with an error: a
+// wrong or expired code (401 invalid_code), too many tries (429), a wrong
+// address (404), and so on. Status and Code let the setup window explain it
+// in plain words while still showing the code.
+type RefusedError struct {
+	Status  int    // the HTTP status
+	Code    string // the server's error code, such as "invalid_code"; may be empty
+	Message string // the server's message; may be empty
+}
+
+func (e *RefusedError) Error() string {
+	if e.Status == http.StatusNotFound {
+		return fmt.Sprintf("pairing: the server has nothing at %s (404). %s", api.PathPair, api.AddressHint)
+	}
+	return fmt.Sprintf("pairing refused (%d %s): %s", e.Status, e.Code, e.Message)
 }

@@ -86,3 +86,33 @@ func TestInstallSteps(t *testing.T) {
 		t.Fatalf("a wrong code: err %v, started %v", err, f3.started)
 	}
 }
+
+// A printer of another width keeps its dots, and reports the paper class
+// Palate's server knows.
+func TestMakePrinterWithDots(t *testing.T) {
+	raw := &config.Config{Server: "https://palate.example"}
+	p, err := makePrinter(raw, printerInput{Name: "Bill", ID: "p-bill", Where: "192.168.1.52", Width: 80, Dots: 512}, "")
+	if err != nil || p.Dots != 512 || p.Width != 80 || p.Paper() != "80 mm, 512 dots" {
+		t.Fatalf("p = %+v, %v", p, err)
+	}
+	if _, err := makePrinter(raw, printerInput{Name: "Bill", ID: "p-bill", Where: "192.168.1.52", Width: 80, Dots: 500}, ""); err == nil {
+		t.Fatal("500 dots (not a multiple of 8) accepted")
+	}
+}
+
+// printer set -dots picks the paper class from the dots unless -width says.
+func TestApplyFlagsDots(t *testing.T) {
+	p := config.Printer{Width: 58}
+	applyFlags(&p, "", "", "", 0, 832, "")
+	if p.Dots != 832 || p.Width != 80 {
+		t.Fatalf("after -dots 832: %+v", p)
+	}
+	applyFlags(&p, "", "", "", 0, 0, "")
+	if p.Dots != 0 || p.Width != 80 {
+		t.Fatalf("after -dots 0: %+v", p)
+	}
+	applyFlags(&p, "", "", "", 0, -1, "")
+	if p.Dots != 0 {
+		t.Fatalf("no -dots changed it: %+v", p)
+	}
+}

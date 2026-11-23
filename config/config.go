@@ -24,12 +24,13 @@ import (
 
 // Config is the agent's local config file (JSON).
 type Config struct {
-	Server         string    `json:"server"`                    // https://..., or http:// on loopback for the rig
-	AgentName      string    `json:"agent_name,omitempty"`      // shown in the portal; defaults to the hostname
-	CredentialFile string    `json:"credential_file,omitempty"` // defaults to credential.bin beside the config
-	LedgerFile     string    `json:"ledger_file,omitempty"`     // defaults to ledger.bin beside the config
-	EdgePath       string    `json:"edge_path,omitempty"`       // msedge.exe, for HTML documents; empty finds it
-	HTMLWorkDir    string    `json:"html_work_dir,omitempty"`   // scratch space for drawing HTML; defaults to html-work beside the config
+	Server         string    `json:"server"`                     // https://..., or http:// on loopback for the rig
+	AgentName      string    `json:"agent_name,omitempty"`       // shown in the portal; defaults to the hostname
+	CredentialFile string    `json:"credential_file,omitempty"`  // defaults to credential.bin beside the config
+	LedgerFile     string    `json:"ledger_file,omitempty"`      // defaults to ledger.bin beside the config
+	EdgePath       string    `json:"edge_path,omitempty"`        // msedge.exe, for HTML documents; empty finds it
+	HTMLWorkDir    string    `json:"html_work_dir,omitempty"`    // scratch space for drawing HTML; defaults to html-work beside the config
+	HTMLPxPerInch  float64   `json:"html_px_per_inch,omitempty"` // CSS pixels per inch on paper for HTML documents: default 96, as a browser prints; 203.2 for one pixel per printer dot
 	Printers       []Printer `json:"printers"`
 	Timings        Timings   `json:"timings,omitzero"`
 
@@ -47,8 +48,28 @@ type Printer struct {
 	Kind        string `json:"kind"`                   // "network" or "usb"
 	Address     string `json:"address,omitempty"`      // network: "192.168.1.50" or "192.168.1.50:9100"
 	PrinterName string `json:"printer_name,omitempty"` // usb: the printer's name in Windows
-	Width       int    `json:"width"`                  // 58 or 80
+	Width       int    `json:"width"`                  // 58 or 80: the paper class Palate's server knows
+	Dots        int    `json:"dots,omitempty"`         // dots across it really prints, when not the usual (384 on 58 mm, 576 on 80 mm): 512 on an Epson TM-T88, 832 on 112 mm
 	Backup      string `json:"backup,omitempty"`       // id of another printer on this till, used when this one is down
+}
+
+// PrintDots is how many dots across the printer prints: Dots if set,
+// otherwise the usual for its width.
+func (p Printer) PrintDots() int {
+	if p.Dots != 0 {
+		return p.Dots
+	}
+	return job.Width(p.Width).Dots()
+}
+
+// Paper describes the printer's paper for people: "80 mm", or with its dots
+// when they aren't the usual ("80 mm, 512 dots").
+func (p Printer) Paper() string {
+	s := fmt.Sprintf("%d mm", p.Width)
+	if p.Dots != 0 && p.Dots != job.Width(p.Width).Dots() {
+		s += fmt.Sprintf(", %d dots", p.Dots)
+	}
+	return s
 }
 
 // Timings are the agent's tunable numbers. Zero values take the defaults
@@ -143,6 +164,9 @@ func (c *Config) Validate() error {
 	if len(c.Printers) == 0 {
 		return errors.New("no printers configured")
 	}
+	if c.HTMLPxPerInch != 0 && (c.HTMLPxPerInch < 72 || c.HTMLPxPerInch > 203.2) {
+		return errors.New("html_px_per_inch must be from 72 to 203.2 (96 prints HTML as a browser does; 203.2 is one pixel per printer dot)")
+	}
 	seen := map[string]bool{}
 	for i := range c.Printers {
 		p := &c.Printers[i]
@@ -155,6 +179,12 @@ func (c *Config) Validate() error {
 		seen[p.ID] = true
 		if !job.Width(p.Width).Valid() {
 			return fmt.Errorf("printer %q: width must be 58 or 80", p.ID)
+		}
+		if p.Dots != 0 && !job.ValidDots(p.Dots) {
+			return fmt.Errorf("printer %q: dots must be a multiple of 8 from %d to %d (384 on most 58 mm printers, 576 on most 80 mm ones)", p.ID, job.MinDots, job.MaxDots)
+		}
+		if p.Dots == job.Width(p.Width).Dots() {
+			p.Dots = 0 // the usual for its width: say nothing
 		}
 		switch p.Kind {
 		case "network":

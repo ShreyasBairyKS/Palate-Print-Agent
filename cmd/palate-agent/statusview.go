@@ -90,6 +90,9 @@ func describeStatus(f status.File, readErr error, svc string, now time.Time) sta
 			if b := names[p.Backup]; b != "" {
 				l.Text += ". Its tickets go to " + b
 			}
+			if why != "" {
+				l.Text += "   (error code: " + why + ")"
+			}
 			advice = append(advice, fix(p.Name, why))
 		default:
 			l.Text = "•   " + p.Name + "   —   "
@@ -110,7 +113,7 @@ func describeStatus(f status.File, readErr error, svc string, now time.Time) sta
 	default:
 		v.Bad = true
 		v.Detail = "Can't reach Palate since " + clock(f.Server.Since, now) + ". New orders print once the connection is back."
-		advice = append(advice, "Check this till's internet connection.")
+		advice = append(advice, explainText(f.Server.Error).String())
 	}
 	switch n := f.QueueDepth; {
 	case n == 1:

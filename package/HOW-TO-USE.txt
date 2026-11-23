@@ -33,7 +33,6 @@ A. INSTALL THE AGENT ON A REAL TILL
 -----------------------------------
 
 You need:
-  - Palate's server address (starts with https://)
   - a pairing code from the Palate portal ("Add a till"). Codes expire after
     10 minutes, so get it just before step 5.
   - the printers switched on: network printers cabled to the same network
@@ -41,36 +40,45 @@ You need:
 
 1. Double-click palate-agent.exe.
 2. Windows asks "Do you want to allow this app to make changes?" -> Yes.
-   The "Palate print agent setup" window opens.
-3. Type Palate's server address in box 1, exactly as Palate gave it. If it
-   has a path such as /api/print-agent, keep that, but leave /v1 off the
-   end (the agent adds it).
-4. Printers (box 2). The window looks for network printers by itself as it
+   The "Palate print agent" window opens.
+3. "Palate's server" is filled in already. Leave it, unless Palate
+   gives you another address: then press "Change..." and type it. Typing
+   just the website (plexus.palatepower.com) is fine: the agent adds
+   https:// and /api/print-agent itself.
+4. Printers. The window looks for network printers by itself as it
    opens; the Progress box at the bottom says what it found.
      - Press "Find printers...". Not sure which printer is which? Press
        "Print address slips": each printer prints its own address.
      - Pick one, press "Add selected...", type the name the kitchen uses
-       for it (Tandoor, Pass, Bill...), choose the paper width, press Add.
+       for it (Tandoor, Pass, Bill...), choose the paper, press Add.
+       Most printers are "80 mm (576 dots)" or "58 mm (384 dots)". If the
+       test slip is cut off on the right, try "80 mm, 512 dots"; for any
+       other printer choose "Other" and type its dots across.
      - A test slip prints at once. The list shows a tick if it worked.
      - Repeat for every printer. A printer that wasn't found: press
        "Add printer..." and type its IP address, or pick a USB printer.
-5. Type the pairing code in box 3.
+5. Type the pairing code in "Pairing code".
 6. Press "Install and start". When Progress says "Running", close the
    window. The agent now starts with Windows by itself.
 
-Is everything working? Double-click palate-agent.exe again. Once the agent
-is installed, it opens the "Palate printers" status window, with no
-permission question, so anyone on the till can open it:
+Everything else happens in the same window: double-click palate-agent.exe
+again. Once the agent is installed it opens with no permission question, so
+anyone on the till can open it. At the top, in green or red:
   - every printer, working or NOT WORKING and why (out of paper, switched
     off), and since when;
   - whether the till is connected to Palate;
   - what to do about a problem.
 It updates by itself and flashes in the taskbar when a printer stops, so
-it can stay open (minimised) all day.
+it can stay open (minimised) all day. "Test print" works straight away.
 
-Later changes (a new printer, a printer moved): in that window press
-"Change setup..." and choose Yes when Windows asks. The setup window opens
-on the installed agent.
+Buttons with a shield (Add printer, Edit, Remove, Change, Remove from this
+PC...) change the till, so Windows asks for permission first: choose Yes and
+the window comes back in the same place, already doing what you pressed.
+
+A problem you can't fix? Press "Send to support...". It makes a report
+(version, Windows, Edge, printers, connection, errors), copies it, and
+saves it on the Desktop: paste it into WhatsApp or an email to Palate
+support.
 
 Give every network printer a fixed IP address (on the printer, or a "DHCP
 reservation" on the router), so it keeps the same address after a restart.
@@ -107,7 +115,7 @@ To print on a real printer as well, add its address to the line in step 3:
 (For a USB printer use  -RealUsbPrinter "EPSON TM-T82 Receipt"  instead,
 and add  -RealWidth 58  for 58 mm paper.)
 
-Showing the real setup window too (this DOES install the agent on the PC):
+Showing the real window too (this DOES install the agent on the PC):
 
 1. Open two PowerShell windows in the folder, as in steps 1-2 above.
 2. In the first, start the mock Palate server with a pairing code:
@@ -116,16 +124,15 @@ Showing the real setup window too (this DOES install the agent on the PC):
 3. In the second, start an on-screen printer:
      .\fakeprinter.exe -dump
 4. Double-click palate-agent.exe and follow part A, with:
-     - server address:  http://127.0.0.1:8080
+     - server address:  press "Change..." and type http://127.0.0.1:8080
      - "Find printers..." finds the fake printer as "127.0.0.1 (this PC)"
      - the pairing code from step 2 (restart mockpalate for a new one
        after 10 minutes)
 5. Open http://127.0.0.1:8080 in the browser, pick your printer in the
    order or bill, and confirm it: the second PowerShell window shows each
    ticket the fake printer received, decoded.
-6. Afterwards, remove it again: open PowerShell as administrator in the
-   folder and run
-     .\palate-agent.exe uninstall
+6. Afterwards, remove it again: double-click palate-agent.exe and press
+   "Remove from this PC...".
 
 
 C. BUILD PALATE'S SERVER SIDE
@@ -168,12 +175,28 @@ IF SOMETHING GOES WRONG
   off. Print its self-test page (on most receipt printers, hold the FEED
   button while switching it on) to see its IP address, and add it with
   "Add printer...".
-- Pairing fails: the code may have expired (10 minutes). Get a new one
-  from the Palate portal. A message about "404" and the server address
-  means the address is wrong: use the one Palate gave, with any path it
-  has, and without /v1 on the end.
-- A printer shows NOT WORKING in the status window: do what the window
+- Pairing fails: the message says why in plain words, with an error code
+  underneath (give the code to support). "401 invalid_code" means the code
+  was mistyped, used, or expired (10 minutes): get a new one from the
+  Palate portal. "403" or "404" means the server address is wrong: use the
+  one already filled in.
+- A printer shows NOT WORKING in the window: do what the window
   says (new paper roll, switch it on, check its cable). It starts printing
   again by itself within a minute; until then its tickets go to its backup
   printer, if it has one.
-- Anything else: docs\TILL-SETUP.md, section "If something's wrong".
+- Anything else: press "Send to support..." in the window and send
+  the report to Palate support, or see docs\TILL-SETUP.md, section "If
+  something's wrong".
+
+
+UPDATING AND REMOVING
+---------------------
+Update: extract the new zip and double-click its palate-agent.exe. It sees
+the installed version and asks "Install this file's version?" with both
+versions and build dates. Choose Yes (and Yes when Windows asks); the
+window carries on with the update. Printers,
+settings and pairing are kept; printing pauses for a few seconds.
+
+Remove: double-click palate-agent.exe and press "Remove from this PC...". It asks whether to keep this till's printers,
+settings and pairing (kept by default, so installing again is quick).
+Remove the till in the Palate portal too if it won't be used again.

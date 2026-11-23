@@ -83,7 +83,8 @@ func TestSetupWalksThroughEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("saved config: %v", err)
 	}
-	if cfg.Server != "https://palate.example" || len(cfg.Printers) != 2 {
+	// The bare website typed gets the path Palate serves the agent under.
+	if cfg.Server != "https://palate.example/api/print-agent" || len(cfg.Printers) != 2 {
 		t.Fatalf("config = %+v", cfg)
 	}
 	tandoor, pass := cfg.Find("p-tandoor"), cfg.Find("p-pass")

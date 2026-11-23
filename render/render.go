@@ -43,13 +43,9 @@ var (
 	cmdCut         = []byte{0x1D, 'V', 66, 0} // feed to cutter, partial cut
 )
 
-// columns is the font A line length for each paper width.
-func columns(w job.Width) int {
-	if w == job.Width58 {
-		return 32
-	}
-	return 48
-}
+// columns is the font A line length for a printer dots across: 32 on
+// 384 dots (58 mm), 48 on 576 (80 mm), 42 on 512.
+func columns(dots int) int { return dots / colDots }
 
 // renderer carries the output and the first error, so the layout reads
 // straight down.
@@ -66,11 +62,21 @@ func Render(slip job.Slip, width job.Width) ([]byte, error) {
 	if !width.Valid() {
 		return nil, errors.New("render: width must be 58 or 80 mm")
 	}
+	return RenderDots(slip, width.Dots())
+}
+
+// RenderDots is Render for a printer that prints dots across: lines are as
+// many characters long as fit (dots/12), and text drawn as a picture is
+// exactly dots wide.
+func RenderDots(slip job.Slip, dots int) ([]byte, error) {
+	if !job.ValidDots(dots) {
+		return nil, fmt.Errorf("render: %d dots across isn't a printer width (a multiple of 8 from %d to %d)", dots, job.MinDots, job.MaxDots)
+	}
 	if err := checkSlip(slip); err != nil {
 		return nil, err
 	}
-	cols := columns(width)
-	r := &renderer{cols: cols, paperDots: cols * colDots}
+	cols := columns(dots)
+	r := &renderer{cols: cols, paperDots: dots}
 	b := &r.b
 	b.Write(cmdInit)
 	b.Write(cmdCodePage)

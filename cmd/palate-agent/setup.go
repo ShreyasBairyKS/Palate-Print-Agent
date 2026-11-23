@@ -4,8 +4,9 @@ package main
 // (or runs "palate-agent setup"). It asks for administrator rights, then
 // walks through the server address, the printers (each test-printed), the
 // service, the pairing code and starting, in that order, with the same rules
-// as the individual commands. Once the agent is installed, it shows its
-// status instead.
+// as the individual commands. Once the agent is installed, the same window
+// shows its status and changes it, asking for administrator rights only
+// when a change is pressed.
 
 import (
 	"bufio"
@@ -55,6 +56,10 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 	pause := fs.Bool("pause", false, "console setup: wait for Enter before closing")
 	window := fs.Bool("gui", doubleClicked && guiAvailable(), "show the setup window instead of asking in the console")
 	noElevate := fs.Bool("no-elevate", false, "don't ask for administrator rights (to look at the window; installing then fails)")
+	var o appOptions
+	fs.StringVar(&o.then, "then", "", "window: what to do first (used when it reopens with administrator rights)")
+	fs.StringVar(&o.code, "code", "", "window, with -then pair: the pairing code typed before it reopened")
+	fs.StringVar(&o.at, "at", "", "window: where to put it, x,y (where it was before it reopened)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -76,12 +81,15 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		return err
 	}
 
-	// Double-clicked where the agent is already installed: show how the
-	// printers are, which needs no administrator rights. Setup is a button
-	// away in that window.
-	if doubleClicked && *window && !service.IsElevated() {
+	env := newSetupEnv(*path, in, log)
+
+	// Where the agent is already installed, the window opens without
+	// administrator rights: it shows everything, and asks Windows only when a
+	// change is pressed (gui_windows.go). A newer palate-agent.exe offers to
+	// update the installed one from the same window.
+	if *window && !service.IsElevated() {
 		if _, err := service.Status(); err == nil {
-			if err := runMonitor(*path, startedByDoubleClick()); err == nil {
+			if err := runGUI(env, startedByDoubleClick(), o); err == nil {
 				return nil
 			}
 		}
@@ -102,8 +110,29 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		return nil
 	}
 
-	env := &setupEnv{
-		in: in, out: os.Stdout, cfgPath: *path,
+	if *window {
+		if err := runGUI(env, startedByDoubleClick(), o); err != nil {
+			// No window possible: fall back to asking in the console.
+			fmt.Println("The setup window couldn't open (" + err.Error() + "); continuing here.")
+			return finish(runSetup(env))
+		}
+		return nil
+	}
+	return finish(runSetup(env))
+}
+
+// appOptions are how the window opens.
+type appOptions struct {
+	then string // what to do first: the change pressed before it reopened with administrator rights
+	code string // with then "pair": the pairing code typed before
+	at   string // "x,y": where the window was
+}
+
+// newSetupEnv is setup's real surroundings: this PC's service, printers and
+// Palate's server.
+func newSetupEnv(path string, in *bufio.Reader, log *slog.Logger) *setupEnv {
+	return &setupEnv{
+		in: in, out: os.Stdout, cfgPath: path,
 		status:    service.Status,
 		install:   func(p string) error { return installService(p, "service", false) },
 		pair:      func(cfg *config.Config, code string) (string, error) { return pairTill(cfg, code, log) },
@@ -114,15 +143,13 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 		find:      findPrinters,
 		identify:  identifyPrinter,
 	}
-	if *window {
-		if err := runGUI(env, startedByDoubleClick()); err != nil {
-			// No window possible: fall back to asking in the console.
-			fmt.Println("The setup window couldn't open (" + err.Error() + "); continuing here.")
-			return finish(runSetup(env))
-		}
-		return nil
-	}
-	return finish(runSetup(env))
+}
+
+// openWindow opens the print agent's window on an installed till: with
+// administrator rights it can change things straight away, without them it
+// asks Windows first.
+func openWindow(path string, log *slog.Logger) error {
+	return runGUI(newSetupEnv(path, bufio.NewReader(os.Stdin), log), startedByDoubleClick(), appOptions{})
 }
 
 func runSetup(e *setupEnv) (err error) {
@@ -208,7 +235,7 @@ func (e *setupEnv) steps() error {
 			}
 			dev, err := e.pair(cfg, strings.ToUpper(code))
 			if err != nil {
-				e.say("  That didn't work: %v", err)
+				e.say("  That didn't work. %s", explain(err).String())
 				continue
 			}
 			e.say("  Paired as %s; Palate now knows this PC's printers.", dev)
@@ -235,7 +262,10 @@ func (e *setupEnv) buildConfig() (*config.Config, error) {
 	e.say("\nStep 1 of 5: Palate's server.")
 	var server string
 	for {
-		server = e.ask("Server address (it starts with https://): ")
+		server = config.NormalizeServer(e.ask("Server address (press Enter for " + config.DefaultServer + "): "))
+		if server == "" {
+			server = config.DefaultServer
+		}
 		if err := config.CheckServer(server); err != nil {
 			e.say("  %v", err)
 			continue
@@ -409,7 +439,7 @@ func (e *setupEnv) testUntilOK(p config.Printer, t config.Timings) bool {
 		if err == nil {
 			return true
 		}
-		e.say("  The test print failed: %v", err)
+		e.say("  The test print failed. %s", explain(err).String())
 		switch strings.ToLower(e.ask("  [r]etry, [s]kip the test and add it anyway, or [c]hange the details? ")) {
 		case "s", "skip":
 			return true

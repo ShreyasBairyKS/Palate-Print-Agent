@@ -121,7 +121,7 @@ printer change. It **replaces** the till's printer list.
 | `id` | What jobs must name. Unique on the till; set at installation. |
 | `name` | Shown in the portal and printed on BACKUP FOR banners. |
 | `kind` | `network` or `usb`. For information only. |
-| `width` | Paper width in mm: `58` or `80`. Use it to design bills for the roll. |
+| `width` | Paper width in mm: `58` or `80`. Use it to design bills for the roll. A printer that prints another width (512 dots on an Epson TM-T88, 832 on 112 mm paper) is reported by its class: `58` up to 432 dots, `80` above. Its bills are drawn at its real width, with the class `paper-80` (or `paper-58`) and also `paper-512dots` on `<html>`. |
 
 Answer `204`. A bad entry gets `400` with code `bad_printer`.
 
@@ -375,16 +375,29 @@ How the agent draws it:
    every `<meta http-equiv>` and every `on…` attribute, and adds a policy
    that blocks scripts, network and file access.
 2. Hidden Microsoft Edge (on every Windows 10 and 11 till) lays the page out
-   **exactly 576 px wide for 80 mm paper, 384 px for 58 mm**, and the result
-   is printed in black and white, then cut.
+   **at the size a browser prints it**: CSS's own 96 px to the inch, so the
+   page is exactly the printer's print width, **72 mm (272 px) on 80 mm
+   paper, 48 mm (181 px) on 58 mm**, and `mm`, `pt` and `px` sizes print at
+   their real size. The same HTML prints the same from a browser and from
+   the agent. It is then printed in black and white, and cut.
+   (Before this, the agent drew one CSS pixel per printer dot, 576 px wide,
+   which printed pages made for browsers at 47% of their size. A till can
+   go back to that with `"html_px_per_inch": 203.2` in agent.json.)
 
 What the HTML must be:
 
 - **Self-contained:** CSS in `<style>`; images as `data:` URIs or inline
   `<svg>`. Anything loaded from a URL is blocked and simply missing.
 - **No scripts.** They don't run.
-- **Full width,** with no fixed width on the body. Anything wider than the
-  paper is cut off on the right.
+- **Full width,** with no fixed width on the body. The agent prints like a
+  browser's **"Fit to printable area"**: your `@media print` rules apply
+  (and `@media screen` ones don't), and a page with anything wider than the
+  72 mm print width is shrunk as a whole until it fits, which makes all of
+  its text smaller. So design for 72 mm (`width: 100%`, not `80mm` or a
+  fixed `px` width) to print at the size you chose. Shrinking stops at half
+  size; anything still too wide is then cut off on the right.
+- **As long as its content:** the paper is cut just below the last printed
+  line, so blank space at the end, or a fixed page height, wastes no paper.
 - **One design for both rolls:** `<html>` carries the class `paper-80` or
   `paper-58` (and `data-paper-dots="576"` or `"384"`), so the narrow roll can
   have its own rules, for example `html.paper-58 body { font-size: 15px }`.

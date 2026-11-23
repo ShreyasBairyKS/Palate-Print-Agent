@@ -4,32 +4,33 @@
 <meta charset="utf-8">
 <title>Bill B-2041</title>
 <style>
-  /* Fits both papers. The agent lays the page out exactly as wide as the
-     paper (576 px on 80 mm, 384 px on 58 mm) and marks <html> with the class
-     paper-80 or paper-58, so use the full width (no fixed width) and shrink
-     the type on the narrow roll. Black on white, no page breaks, everything
-     inline: the agent blocks scripts, network and files. */
-  body { margin: 0; padding: 6px 8px 0; box-sizing: border-box;
-         font: 21px/1.35 Arial, "Nirmala UI", sans-serif; color: #000; background: #fff; }
-  html.paper-58 body { font-size: 15px; padding: 4px 4px 0; }
-  html.paper-58 h1 { font-size: 23px; }
-  html.paper-58 .small, html.paper-58 .note { font-size: 13px; }
-  html.paper-58 .total td { font-size: 21px; }
-  html.paper-58 .logo { width: 44px; height: 44px; }
+  /* Fits both papers. The agent draws the page at the size a browser
+     prints it (96 px to the inch), exactly as wide as the printer's print
+     width (72 mm on 80 mm paper, 48 mm on 58 mm) and marks <html> with the
+     class paper-80 or paper-58, so use the full width (no fixed width) and
+     shrink the type on the narrow roll. Black on white, no page breaks,
+     everything inline: the agent blocks scripts, network and files. */
+  body { margin: 0; padding: 3px 4px 0; box-sizing: border-box;
+         font: 10px/1.35 Arial, "Nirmala UI", sans-serif; color: #000; background: #fff; }
+  html.paper-58 body { font-size: 7px; padding: 2px 2px 0; }
+  html.paper-58 h1 { font-size: 11px; }
+  html.paper-58 .small, html.paper-58 .note { font-size: 6px; }
+  html.paper-58 .total td { font-size: 10px; }
+  html.paper-58 .logo { width: 21px; height: 21px; }
   .c { text-align: center; }
-  h1 { font-size: 32px; margin: 4px 0 0; letter-spacing: 1px; }
-  .small { font-size: 18px; }
-  hr { border: 0; border-top: 2px dashed #000; margin: 8px 0; }
+  h1 { font-size: 15px; margin: 2px 0 0; letter-spacing: 0.5px; }
+  .small { font-size: 8.5px; }
+  hr { border: 0; border-top: 1px dashed #000; margin: 4px 0; }
   table { width: 100%; border-collapse: collapse; }
-  td { padding: 2px 0; vertical-align: top; }
-  td.r { text-align: right; white-space: nowrap; padding-left: 12px; }
-  .note { font-size: 18px; padding-left: 28px; }
-  .total td { font-weight: bold; font-size: 30px; border-top: 3px solid #000; padding-top: 6px; }
+  td { padding: 1px 0; vertical-align: top; }
+  td.r { text-align: right; white-space: nowrap; padding-left: 6px; }
+  .note { font-size: 8.5px; padding-left: 13px; }
+  .total td { font-weight: bold; font-size: 14px; border-top: 1.5px solid #000; padding-top: 3px; }
   .logo { display: block; margin: 0 auto; }
 </style>
 </head>
 <body>
-  <svg class="logo" width="64" height="64" viewBox="0 0 64 64" aria-hidden="true">
+  <svg class="logo" width="30" height="30" viewBox="0 0 64 64" aria-hidden="true">
     <circle cx="32" cy="32" r="29" fill="none" stroke="#000" stroke-width="4"/>
     <path d="M20 40 Q32 18 44 40 Z" fill="#000"/>
   </svg>

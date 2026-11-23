@@ -17,20 +17,22 @@ printers. It takes about 15 minutes per till.
   - **USB printers:** installed in Windows **for all users** (Settings →
     Bluetooth & devices → Printers & scanners), so the service can see
     them.
-- **Palate's server address** (`https://…`) and a **pairing code** from the
-  Palate portal ("Add a till"). Codes expire after 10 minutes, so get it
+- A **pairing code** from the Palate portal ("Add a till"). Palate's
+  server address is filled in already. Codes expire after 10 minutes, so get it
   when you reach step 5.
 
 ## The quick way: double-click
 
 1. Unblock and extract the zip (step 1 below).
 2. **Double-click `palate-agent.exe`.** Windows asks to allow it to make
-   changes: choose **Yes**. The **Palate print agent setup** window opens.
+   changes: choose **Yes**. The **Palate print agent** window opens.
 3. Fill it in, top to bottom:
-   - **1 · Palate's server address** (`https://…`), exactly as Palate gave
-     it, including any path such as `/api/print-agent`, but **without
-     `/v1`** on the end: the agent adds that itself.
-   - **2 · Printers:** when the window opens it looks for receipt
+   - **Palate's server** is filled in already
+     (`https://plexus.palatepower.com/api/print-agent`). Leave it unless
+     Palate gives you another; then press **Change…** and type it. Just the
+     website is enough: the agent adds `https://` and `/api/print-agent`,
+     and drops a `/v1` on the end.
+   - **Printers:** when the window opens it looks for receipt
      printers on the till's network by itself (a few seconds) and says what
      it found in **Progress**. Press **Find printers…** to see them. If you
      can't tell which is which, press **Print address slips**: each printer
@@ -40,17 +42,21 @@ printers. It takes about 15 minutes per till.
      can be added with **Add printer…**: choose **Network printer** and type
      its IP address, or **USB printer** and pick it from the list (Windows'
      PDF, XPS, OneNote and fax "printers" are left out). Pick the paper
-     width and, optionally, a backup printer. A **test slip prints** as soon
+     (58 mm, 80 mm, 80 mm at 512 dots for an Epson TM-T88, 112 mm, or
+     **Other** with the dots across typed in) and, optionally, a backup
+     printer. If the test slip is cut off on the right, the printer prints
+     fewer dots than chosen; if it stops short of the edge, more. A **test slip prints** as soon
      as you add a printer; the list shows ✓ or ✗. **Edit…**, **Remove** and
      **Test print** work on the selected printer.
-   - **3 · Pairing code** from the Palate portal ("Add a till"). You can
+   - **Pairing code** from the Palate portal ("Add a till"). You can
      leave it empty and pair later.
 4. Press **Install and start**. The **Progress** box shows each step:
    saving, installing the service, pairing, starting. When it says
    **Running**, close the window.
 
-Double-clicking again later opens the **status window** (Palate printers),
-which needs no administrator rights, so restaurant staff can open it too:
+Double-clicking again later opens the **same window**. On an installed till
+it opens without administrator rights, so restaurant staff can open it too,
+and its top half shows, in green or red:
 
 - each printer, **working** or **NOT WORKING** and why (out of paper, can't
   connect to it, not answering), and since when;
@@ -62,11 +68,13 @@ down, so it can stay open, minimised, all day. The agent checks idle printers
 once a minute, so a printer switched off between orders shows up before the
 next ticket. USB printers show their state once they print.
 
-**Change setup...** in that window opens the setup window (Windows asks for
-administrator rights): its printers can be tested or changed there (each
-change is test-printed, saved and applied by restarting the service), its
-list shows each printer's live state, and an agent that isn't paired yet can
-be paired. The steps below do the same thing one command at
+**Test print** and **Send to support…** work straight away. Buttons that
+change the till carry Windows' shield (**Add printer…**, **Edit…**,
+**Remove**, **Find printers…**, **Change…**, **Start printing** or **Pair and
+start**, **Remove from this PC…**): pressing one asks Windows for
+administrator rights, and the window reopens in the same place with them,
+already doing what was pressed. Each printer change is test-printed, saved
+and applied by restarting the service. The steps below do the same thing one command at
 a time, for scripted installs or when something needs fixing; `palate-agent
 setup` asks the same questions in the console.
 
@@ -88,7 +96,7 @@ run it, choose **More info → Run anyway**. (The signed release won't need
 this.)
 
 `palate-agent.exe` is also a command-line program: run in PowerShell with a
-command, it does that one thing; double-clicked, it opens the setup window
+command, it does that one thing; double-clicked, it opens the window
 above.
 
 ## 2. Find the printers
@@ -188,13 +196,17 @@ registered".
 
 | Task | Command (PowerShell as administrator) |
 | --- | --- |
-| Is it running? Are the printers working? | Double-click `palate-agent.exe` (status window), or `palate-agent status` |
+| Is it running? Are the printers working? | Double-click `palate-agent.exe`, or `palate-agent status` |
 | A printer got a new IP address | `palate-agent printer set p-tandoor -address 192.168.1.60` |
 | A printer was replaced | `printer set` with its new address or `-usb` name; same id |
 | Change paper width | `palate-agent printer set p-pass -width 58` |
+| A printer prints narrower or wider than usual (test slip cut off on the right, or not reaching the edge) | `palate-agent printer set p-pass -dots 512` (Epson TM-T88), `-dots 832` (112 mm), or its own dots; `-dots 0` for the usual |
 | Test a printer | `palate-agent test-print -printer p-tandoor` |
 | Restart | `palate-agent stop`, then `palate-agent start` |
-| Remove the agent | `palate-agent uninstall` (keeps `C:\ProgramData\PalatePrintAgent`) |
+| Update to a new version | Double-click the new `palate-agent.exe` and answer **Yes**: it shows both versions and build dates, keeps everything, and restarts the service. Or `palate-agent update` from the new file's folder. |
+| Which version is installed? | The window shows it with its build date; or `palate-agent version` |
+| Send support what they need | **Send to support…** in the window: copies a report and saves it on the Desktop (with administrator rights, it includes the settings and log) |
+| Remove the agent | **Remove from this PC…** in the window (asks whether to keep `C:\ProgramData\PalatePrintAgent`), or `palate-agent uninstall` (keeps it) |
 
 After install, `palate-agent` is in `C:\Program Files\PalatePrintAgent`; run
 it from there (or from the setup folder).
@@ -216,7 +228,7 @@ in the Palate portal, not on the till.
 | Printed-job ledger (encrypted, job ids only) | `C:\ProgramData\PalatePrintAgent\ledger.bin` |
 | Log | `C:\ProgramData\PalatePrintAgent\logs\agent.log` |
 | Printer change history | `C:\ProgramData\PalatePrintAgent\logs\config-changes.log` |
-| Printer status (what the status window shows) | `C:\ProgramData\PalatePrintAgent\status.json` |
+| Printer status (what the window shows) | `C:\ProgramData\PalatePrintAgent\status.json` |
 
 The data folder is closed to everyone but Windows itself, administrators and
 the agent. The one exception is `status.json`, which every local user can
@@ -227,10 +239,11 @@ to Palate. No credential or ticket contents.
 
 | Symptom | What to check |
 | --- | --- |
+| A message with an error code | The words say what to do. The code (for example `401 invalid_code`: wrong, used or expired pairing code; `403`/`404`: wrong server address; `dns`: no internet; `paper out`, `refused`, `no answer`: the printer) is for support. |
 | The log says "re-pair this till" (the service keeps stopping and restarting) | The till was revoked or its credential replaced: get a new code, run `pair`, then `palate-agent stop` and `palate-agent start`. |
 | A USB printer "can't be seen" in the log | Install it for all users, or reinstall the service with `palate-agent install -account localsystem`. |
-| Tickets print as BACKUP FOR … | The main printer is off, out of paper or its address changed; the status window says which. `printer set … -address`. |
-| The status window says "This Windows account can't read the printer status" | The agent was installed by an older version. Install this one over it. |
+| Tickets print as BACKUP FOR … | The main printer is off, out of paper or its address changed; the window says which. `printer set … -address`. |
+| The window says "This Windows account can't read the printer status" | The agent was installed by an older version. Install this one over it. |
 | Bills fail with "Edge drew nothing" | Edge is missing or blocked by policy; set `"edge_path"` in `agent.json` to `msedge.exe`'s location. |
 | Bills cut off on the right | The bill's HTML has a fixed width; Palate's design must use the full width (their spec, section 10). |
 | Nothing prints, `status` running | Check the portal links stations to this till's printers, and the till can reach `https://SERVER`. |

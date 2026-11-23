@@ -108,8 +108,8 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, failure ladder to the backup, probing down printers, report |
 | `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
 | `api/` | wire | Wire format and endpoint paths (**provisional**, see below) |
-| `status/` | | The till's status file (`status.json` beside the config): each printer's state, the connection to Palate, tickets waiting. No secrets; readable, and only readable, by local users, so the status window needs no administrator rights |
-| `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `install`, `monitor`, `status`, `start`, `stop`, `uninstall`, `version` |
+| `status/` | | The till's status file (`status.json` beside the config): each printer's state, the connection to Palate, tickets waiting. No secrets; readable, and only readable, by local users, so the window can show it without administrator rights |
+| `cmd/palate-agent/` | | The agent: `printers`, `pair`, `test-print`, `run`, `install`, `monitor`, `status`, `start`, `stop`, `update`, `uninstall`, `version` |
 | `service/` | | The Windows service: start, clean stop, install with restart-on-failure, status |
 | `internal/logfile/` | | The service's log file, rotated by size |
 | `internal/escpos/`, `internal/fakeprinter/`, `internal/mockserver/` | rig | Decoder and ticket preview, fake printer with a control API, mock server |
@@ -213,7 +213,8 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
   "printers": [
     {"id": "p-tandoor", "name": "Tandoor", "kind": "network", "address": "192.168.1.50", "width": 80, "backup": "p-pass"},
     {"id": "p-wok", "name": "Wok", "kind": "network", "address": "192.168.1.51:9100", "width": 58},
-    {"id": "p-pass", "name": "Pass", "kind": "usb", "printer_name": "EPSON TM-T82 Receipt", "width": 80}
+    {"id": "p-pass", "name": "Pass", "kind": "usb", "printer_name": "EPSON TM-T82 Receipt", "width": 80},
+    {"id": "p-bill", "name": "Bill", "kind": "network", "address": "192.168.1.52", "width": 80, "dots": 512}
   ],
   "timings": {"stall_timeout": "10s"}
 }
@@ -221,8 +222,8 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 
 | Command | What it does |
 | --- | --- |
-| Double-click `palate-agent.exe` | Before installing: opens the setup window (asks for administrator rights): server, printers (each test-printed), pairing code, Install and start. Once installed: opens the status window (no administrator rights), with **Change setup...** for the setup window |
-| `palate-agent monitor` | The status window: each printer working or not and why, the connection to Palate, and what to do; refreshed every 2 s, and the window flashes in the taskbar when a printer goes down. No administrator rights needed |
+| Double-click `palate-agent.exe` | Opens the one window. Before installing (asks for administrator rights): server, printers (each test-printed), pairing code, Install and start. Once installed (no administrator rights to look): each printer working or not and why, the connection to Palate and what to do, refreshed every 2 s and flashing in the taskbar when a printer goes down; changes, pairing, update, Send to support and Remove from this PC in the same window, each change asking Windows first (the window reopens with permission and carries on) |
+| `palate-agent monitor` | The same window, on an installed till |
 | `palate-agent setup` | The same steps as questions in the console; `-gui` opens the window instead |
 | `palate-agent init p-tandoor -server https://… -name Tandoor -address 192.168.1.50` | Creates the config with its first printer, test-printed; refuses if one exists |
 | `palate-agent printers` | Lists the Windows printers this process can see; use one as a usb printer's `printer_name` |
@@ -234,7 +235,9 @@ The config lives at `%ProgramData%\PalatePrintAgent\agent.json` unless
 | `palate-agent install` | As administrator: installs the Windows service and starts it if the till is paired (see below) |
 | `palate-agent status` | Whether the service is installed and running, its account, each printer's state, the connection to Palate, and its last log lines (the log for administrators only); needs no administrator rights |
 | `palate-agent start` / `stop` | As administrator. Stop lets the tickets in hand finish (up to 10 s) |
+| `palate-agent update` | As administrator, from a new download: stops the service, replaces the installed program with this one, and starts it again; settings, pairing and ledger are kept. Double-clicking a newer `palate-agent.exe` offers the same. |
 | `palate-agent uninstall` | As administrator: stops and removes the service and the program; keeps the data folder |
+| `palate-agent version` | The version and, for a packaged build, when it was built (`0.4.0-m4 built 2026-11-23T09:12:00Z`) |
 
 ### Changing printers on the till
 
@@ -266,6 +269,7 @@ palate-agent printer remove p-grill
 | --- | --- |
 | Where a printer is: a new IP address, a replacement printer, network to USB or back | `-address IP[:port]`, `-usb "Windows printer name"` |
 | Paper width | `-width 58` or `80` |
+| Dots across, for a printer that isn't the usual 384 (58 mm) or 576 (80 mm): 512 on an Epson TM-T88, 832 on 112 mm paper | `-dots 512`; `-dots 0` goes back to the usual |
 | The name printed on BACKUP FOR banners | `-name` |
 | The backup printer on this till | `-backup ID`, or `-backup none` |
 | Adding or removing a printer | `printer add`, `printer remove` |
@@ -468,11 +472,17 @@ What Palate's HTML should be:
 - **Self-contained:** CSS in `<style>`, images as `data:` URIs or inline
   `<svg>`. Anything fetched from a URL is blocked and simply missing.
 - **No scripts.** They don't run.
-- **Sized for the paper:** the page is laid out exactly 576 px wide for
-  80 mm and 384 px for 58 mm, and anything wider is cut off on the right.
+- **Sized for the paper:** the page is drawn at the size a browser prints
+  it (96 CSS px to the inch), exactly as wide as the printer's print width:
+  72 mm (272 px) on 80 mm paper, 48 mm (181 px) on 58 mm. `mm`, `pt` and
+  `px` print at their real size, so the same HTML prints the same from a
+  browser and from the agent. `@media print` rules apply, as when a
+  browser prints, and a page with anything wider than the print width is
+  shrunk to fit, like a browser's "Fit to printable area" (down to half
+  size; anything still wider is cut off on the right).
   Use the full width (no fixed `width` on the body). `<html>` gets the class
   `paper-80` or `paper-58` (and `data-paper-dots`), so the narrow roll can
-  have its own rules, such as `html.paper-58 body { font-size: 15px }`, as
+  have its own rules, such as `html.paper-58 body { font-size: 7px }`, as
   the sample does. Width media queries don't work: Edge's window is wider
   than the paper. Palate also knows each printer's width from
   `PUT /v1/printers`, so it can send a design per width instead.
@@ -485,7 +495,9 @@ What Palate's HTML should be:
 document on this machine (Edge starts fresh each time); documents are drawn
 one at a time. `edge_path` in the config points at Edge if it isn't in its
 usual place; `html_work_dir` (default `html-work` beside the config) holds
-each document's scratch folder until it is printed.
+each document's scratch folder until it is printed. `html_px_per_inch` (default 96)
+sets the drawing scale; `203.2` draws one CSS pixel per printer dot, as the
+agent did before, which prints pages made for browsers at 47% size.
 
 ### When something gets stuck
 

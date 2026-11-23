@@ -28,10 +28,13 @@ import (
 	"fmt"
 	"image"
 	"image/png"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -51,9 +54,22 @@ type Edge struct {
 	WorkDir   string        // each document gets a throwaway folder in here; "" means the system temp folder
 	Timeout   time.Duration // the longest one document may take; default 30 s
 	MaxHeight int           // the longest document in dots; default 12000 (150 cm at 8 dots/mm)
+	// PxPerInch is how many CSS pixels make an inch on paper. The default,
+	// 96, is the web's own: a page prints at the size a browser prints it,
+	// so 72mm fills an 80 mm roll's print width and 12px text is 12px text.
+	// PrinterDPI (203.2) draws one CSS pixel per printer dot instead, the
+	// agent's behaviour before, which prints a page made for browsers at
+	// 47% of its size.
+	PxPerInch float64
 
 	mu sync.Mutex // one document at a time: tills are often old and short of memory
 }
+
+// PrinterDPI is a receipt printer's resolution: 8 dots per mm.
+const PrinterDPI = 203.2
+
+// WebPxPerInch is CSS's own pixel: 96 to the inch.
+const WebPxPerInch = 96.0
 
 // ErrNoEdge means Microsoft Edge wasn't found on this till.
 var ErrNoEdge = errors.New("htmlrender: Microsoft Edge not found; set edge_path in the config")
@@ -61,11 +77,29 @@ var ErrNoEdge = errors.New("htmlrender: Microsoft Edge not found; set edge_path 
 // Render draws doc widthDots wide and returns the picture, trimmed below the
 // last ink so no paper is wasted. A document taller than MaxHeight is refused
 // rather than printed with its end (usually the total) cut off.
+//
+// It prints the page as a browser prints it with "Fit to printable area":
+// at the web's own size (PxPerInch), with the page's print styles, laid out
+// exactly as wide as the printer's print width, and shrunk to fit if
+// anything on it is wider than that. Nothing is cut off at the side unless
+// it would need shrinking below MinZoom.
 func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Image, error) {
 	if widthDots <= 0 || widthDots%8 != 0 {
 		return nil, fmt.Errorf("htmlrender: width %d dots is not a positive multiple of 8", widthDots)
 	}
-	page, err := Lockdown(doc, widthDots)
+	ppi := e.PxPerInch
+	if ppi == 0 {
+		ppi = WebPxPerInch
+	}
+	if ppi < 72 || ppi > PrinterDPI {
+		return nil, fmt.Errorf("htmlrender: %g CSS pixels per inch is out of range (72 to %g)", ppi, PrinterDPI)
+	}
+	// Each CSS pixel is scale printer dots: about 2.12 at the web's 96 to
+	// the inch. Edge lays the page out in CSS pixels and draws it scale
+	// times bigger, so the picture comes out in printer dots.
+	scale := PrinterDPI / ppi
+	cssWidth := float64(widthDots) / scale // the print width in CSS pixels: 72 mm on 80 mm paper
+	page, err := lockdown(doc, widthDots, cssWidth, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -95,15 +129,85 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 	}
 	defer removeAll(dir)
 
-	pagePath := filepath.Join(dir, "page.html")
-	shotPath := filepath.Join(dir, "shot.png")
+	pass := 0
+	window, windowH := int(math.Ceil(cssWidth))+windowSlack, int(math.Ceil(float64(maxH)/scale))
+	shoot := func(page string, windowW int) (image.Image, error) {
+		pass++
+		return e.shoot(ctx, exe, dir, pass, page, scale, windowW, windowH, timeout)
+	}
+	img, err := shoot(page, window)
+	if err != nil {
+		return nil, err
+	}
+	b := img.Bounds()
+	if b.Dx() < widthDots {
+		return nil, fmt.Errorf("htmlrender: Edge drew %d dots wide, less than the paper's %d (display scaling?)", b.Dx(), widthDots)
+	}
+	// Fit to the printable area, as a browser's "Fit to printable area"
+	// does: a page with anything wider than the paper is drawn again,
+	// shrunk just enough that all of it fits. A page that fits is never
+	// enlarged or otherwise changed.
+	if right := RightmostInk(img); right >= widthDots {
+		if right >= b.Dx()-1 {
+			// It reaches the window's edge and may go further: measure it
+			// in a window wide enough to see it all.
+			wide, err := shoot(page, int(math.Ceil(cssWidth))*3+windowSlack)
+			if err != nil {
+				return nil, err
+			}
+			right = RightmostInk(wide)
+		}
+		zoom := float64(widthDots) / float64(right+1+fitMargin)
+		if zoom < MinZoom {
+			zoom = MinZoom // smaller is unreadable: print at this size, and what's still too wide is cut off
+		}
+		fitted, err := lockdown(doc, widthDots, cssWidth/zoom, zoom)
+		if err != nil {
+			return nil, err
+		}
+		if img, err = shoot(fitted, window); err != nil {
+			return nil, err
+		}
+		b = img.Bounds()
+	}
+	// The window is wider than the paper (see windowSlack); keep just the paper.
+	return Trim(subImage(img, image.Rect(b.Min.X, b.Min.Y, b.Min.X+widthDots, b.Max.Y)), maxH)
+}
+
+// MinZoom is the most a page is shrunk to fit the paper: below about half
+// size a bill's text is too small to read.
+const MinZoom = 0.5
+
+// fitMargin is the room, in dots, left at the right of a page shrunk to fit.
+const fitMargin = 8
+
+// RightmostInk is the x of the rightmost dark pixel, relative to the
+// picture's left edge, or -1 if there is none.
+func RightmostInk(img image.Image) int {
+	b := img.Bounds()
+	for x := b.Max.X - 1; x >= b.Min.X; x-- {
+		for y := b.Min.Y; y < b.Max.Y; y++ {
+			if Ink(img, x, y) {
+				return x - b.Min.X
+			}
+		}
+	}
+	return -1
+}
+
+// shoot has Edge draw page in a window windowW by windowH CSS pixels, scale
+// dots to the pixel, and returns the picture (in dots). Each pass gets its
+// own files and profile, so a pass never meets the last one's Edge closing.
+func (e *Edge) shoot(ctx context.Context, exe, dir string, pass int, page string, scale float64, windowW, windowH int, timeout time.Duration) (image.Image, error) {
+	pagePath := filepath.Join(dir, fmt.Sprintf("page-%d.html", pass))
+	shotPath := filepath.Join(dir, fmt.Sprintf("shot-%d.png", pass))
 	if err := os.WriteFile(pagePath, []byte(page), 0o600); err != nil {
 		return nil, fmt.Errorf("htmlrender: %w", err)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, Args(widthDots+windowSlack, maxH, shotPath, filepath.Join(dir, "profile"), fileURL(pagePath))...)
+	cmd := exec.CommandContext(ctx, exe, Args(windowW, windowH, scale, shotPath, filepath.Join(dir, fmt.Sprintf("profile-%d", pass)), fileURL(pagePath))...)
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
@@ -112,7 +216,11 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 		return nil, fmt.Errorf("htmlrender: Edge took longer than %s", timeout)
 	}
 
-	data, err := os.ReadFile(shotPath)
+	// Since Edge 158 the msedge.exe we start hands the work to another
+	// process and exits before the picture is written, so wait for a whole
+	// picture to appear (within the same time limit) instead of reading the
+	// file the moment it exits.
+	data, err := waitForShot(ctx, shotPath)
 	if err != nil {
 		// Edge exits 0 even when it draws nothing, so the missing file is
 		// the real signal. Its last log line usually says why.
@@ -126,13 +234,7 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 	if err != nil {
 		return nil, fmt.Errorf("htmlrender: reading Edge's picture: %w", err)
 	}
-	b := img.Bounds()
-	if b.Dx() < widthDots {
-		return nil, fmt.Errorf("htmlrender: Edge drew %d dots wide, less than the paper's %d (display scaling?)", b.Dx(), widthDots)
-	}
-	// The page itself is pinned to the paper's width; the window is wider
-	// (see windowSlack), so keep just the paper.
-	return Trim(subImage(img, image.Rect(b.Min.X, b.Min.Y, b.Min.X+widthDots, b.Max.Y)), maxH)
+	return img, nil
 }
 
 // windowSlack is how much wider than the paper Edge's window is. Edge won't
@@ -142,14 +244,15 @@ func (e *Edge) Render(ctx context.Context, doc string, widthDots int) (image.Ima
 // to the paper's width (see Lockdown), and the picture is cropped to it.
 const windowSlack = 240
 
-// Args are the command-line arguments Edge runs with.
-func Args(widthDots, heightDots int, shotPath, profileDir, url string) []string {
+// Args are the command-line arguments Edge runs with: a window width by
+// height CSS pixels, drawn scale dots to the pixel.
+func Args(width, height int, scale float64, shotPath, profileDir, url string) []string {
 	return []string{
 		"--headless=new",
 		"--disable-gpu",
 		"--hide-scrollbars",
-		"--force-device-scale-factor=1",
-		fmt.Sprintf("--window-size=%d,%d", widthDots, heightDots),
+		fmt.Sprintf("--force-device-scale-factor=%.6f", scale),
+		fmt.Sprintf("--window-size=%d,%d", width, height),
 		"--no-first-run",
 		"--no-default-browser-check",
 		"--disable-extensions",
@@ -213,16 +316,26 @@ func subImage(img image.Image, r image.Rectangle) image.Image {
 // load anything or navigate removed, and the drawing policy first in <head>.
 //
 // It also fits the page to the paper: <html> is pinned to widthDots CSS
-// pixels, and gets the class "paper-80" (576 dots) or "paper-58" (384 dots)
-// and a data-paper-dots attribute, so a design can adapt to the roll with
+// pixels, and gets the class "paper-80" (above 432 dots) or "paper-58" (up to
+// 432), plus "paper-512dots" and the like on a printer that isn't 576 or 384
+// dots across, and a data-paper-dots attribute, so a design can adapt to the roll with
 // rules like "html.paper-58 body { font-size: 15px }". Media queries on
 // width don't see the paper, because Edge's window is wider than it.
 func Lockdown(doc string, widthDots int) (string, error) {
+	return lockdown(doc, widthDots, float64(widthDots), 1)
+}
+
+// lockdown is Lockdown with <html> pinned to cssWidth CSS pixels (the
+// paper's print width at the drawing scale: 272.1 px for 576 dots at the
+// web's 96 pixels to the inch, which is exactly 72 mm) and zoomed by zoom,
+// for a page shrunk to fit (cssWidth * zoom is then the print width).
+func lockdown(doc string, widthDots int, cssWidth, zoom float64) (string, error) {
 	root, err := html.Parse(strings.NewReader(strings.TrimPrefix(doc, "\uFEFF")))
 	if err != nil {
 		return "", fmt.Errorf("htmlrender: parsing the document: %w", err)
 	}
 	strip(root)
+	printMedia(root)
 	head := find(root, atom.Head)
 	if head == nil { // html.Parse always makes one; be safe anyway
 		return "", errors.New("htmlrender: the document has no <head>")
@@ -232,21 +345,33 @@ func Lockdown(doc string, widthDots int) (string, error) {
 	charset := &html.Node{Type: html.ElementNode, DataAtom: atom.Meta, Data: "meta", Attr: []html.Attribute{
 		{Key: "charset", Val: "utf-8"}}}
 	fit := &html.Node{Type: html.ElementNode, DataAtom: atom.Style, Data: "style"}
-	fit.AppendChild(&html.Node{Type: html.TextNode, Data: fmt.Sprintf(
-		"html{width:%dpx!important;min-width:0!important;max-width:none!important;overflow:hidden!important}", widthDots)})
+	// Nothing is hidden at the side, so Render can see what is wider than
+	// the paper and shrink the page to fit; the picture is cropped to the
+	// paper afterwards. A white ground keeps a coloured body from reading
+	// as ink across the whole window.
+	css := fmt.Sprintf("html{width:%spx!important;min-width:0!important;max-width:none!important;"+
+		"overflow:visible!important;background:#fff!important",
+		strconv.FormatFloat(math.Round(cssWidth*1000)/1000, 'f', -1, 64))
+	if zoom != 1 {
+		css += fmt.Sprintf(";zoom:%.5f!important", zoom)
+	}
+	fit.AppendChild(&html.Node{Type: html.TextNode, Data: css + "}"})
 	head.InsertBefore(fit, head.FirstChild)
 	head.InsertBefore(csp, head.FirstChild)
 	head.InsertBefore(charset, head.FirstChild)
 	if root := find(root, atom.Html); root != nil {
-		class := fmt.Sprintf("paper-%ddots", widthDots)
-		switch widthDots {
-		case 576:
-			class = "paper-80"
-		case 384:
+		// The roll's class first, which designs are written for; a printer
+		// of another width (512 dots on an Epson TM-T88, 832 on 112 mm)
+		// also gets its exact width, as paper-512dots.
+		class := "paper-80"
+		if widthDots <= 432 {
 			class = "paper-58"
 		}
 		setAttr(root, "data-paper-dots", fmt.Sprint(widthDots))
 		addClass(root, class)
+		if widthDots != 384 && widthDots != 576 {
+			addClass(root, fmt.Sprintf("paper-%ddots", widthDots))
+		}
 	}
 
 	var out bytes.Buffer
@@ -254,6 +379,44 @@ func Lockdown(doc string, widthDots int) (string, error) {
 		return "", fmt.Errorf("htmlrender: %w", err)
 	}
 	return out.String(), nil
+}
+
+// mediaPrint and mediaScreen find the media queries a browser applies when
+// printing and when showing a page.
+var (
+	mediaPrint  = regexp.MustCompile(`(?i)@media\s+(only\s+)?print\b`)
+	mediaScreen = regexp.MustCompile(`(?i)@media\s+(only\s+)?screen\b`)
+)
+
+// printMedia makes the page's print styles apply, as when a browser prints
+// it: rules for print are switched on and rules for the screen off, in
+// <style> elements and their media attributes. Edge draws the page as a
+// screen would, so without this a design's print rules would be ignored.
+func printMedia(n *html.Node) {
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		if c.Type == html.ElementNode && strings.EqualFold(c.Data, "style") {
+			for i, a := range c.Attr {
+				if strings.EqualFold(a.Key, "media") {
+					m := strings.ToLower(strings.TrimSpace(a.Val))
+					switch {
+					case strings.Contains(m, "print"):
+						c.Attr[i].Val = "all"
+					case strings.Contains(m, "screen"):
+						c.Attr[i].Val = "speech"
+					}
+				}
+			}
+			for t := c.FirstChild; t != nil; t = t.NextSibling {
+				if t.Type == html.TextNode {
+					t.Data = mediaPrint.ReplaceAllString(t.Data, "@media all")
+					// "speech" matches nothing here; "not all" would turn
+					// "screen and (min-width: 900px)" into a rule that applies.
+					t.Data = mediaScreen.ReplaceAllString(t.Data, "@media speech")
+				}
+			}
+		}
+		printMedia(c)
+	}
 }
 
 // removed are elements dropped with everything inside them. Matched by name
@@ -359,6 +522,37 @@ func fileURL(path string) string {
 
 // removeAll deletes a work folder. Edge's helper processes can hold files for
 // a moment after the main process exits, so it tries a few times.
+// shotPoll is how often waitForShot looks for Edge's picture.
+const shotPoll = 50 * time.Millisecond
+
+// waitForShot returns the picture at path once it is complete: a file that
+// decodes as a PNG and has stopped growing. It gives up when ctx ends and
+// returns the last read error (os.ErrNotExist if nothing ever appeared).
+func waitForShot(ctx context.Context, path string) ([]byte, error) {
+	var last []byte
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 && bytes.Equal(data, last) {
+			if _, derr := png.Decode(bytes.NewReader(data)); derr == nil {
+				return data, nil
+			}
+		}
+		if err == nil {
+			last = data
+		} else {
+			last = nil
+		}
+		select {
+		case <-ctx.Done():
+			if err == nil {
+				err = errors.New("the picture was never complete")
+			}
+			return nil, err
+		case <-time.After(shotPoll):
+		}
+	}
+}
+
 func removeAll(dir string) {
 	for i := 0; i < 10; i++ {
 		if os.RemoveAll(dir) == nil {

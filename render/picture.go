@@ -2,6 +2,7 @@ package render
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"strings"
 
@@ -36,14 +37,22 @@ func Picture(bn Banners, img image.Image, width job.Width) ([]byte, error) {
 	if !width.Valid() {
 		return nil, errors.New("render: width must be 58 or 80 mm")
 	}
+	return PictureDots(bn, img, width.Dots())
+}
+
+// PictureDots is Picture for a printer that prints dots across; the image
+// should be exactly that wide.
+func PictureDots(bn Banners, img image.Image, dots int) ([]byte, error) {
+	if !job.ValidDots(dots) {
+		return nil, fmt.Errorf("render: %d dots across isn't a printer width (a multiple of 8 from %d to %d)", dots, job.MinDots, job.MaxDots)
+	}
 	if img == nil || img.Bounds().Empty() {
 		return nil, errors.New("render: empty picture")
 	}
 	if img.Bounds().Dy() > MaxPictureRows {
 		return nil, errors.New("render: picture is longer than 150 cm")
 	}
-	cols := columns(width)
-	r := &renderer{cols: cols, paperDots: cols * colDots}
+	r := &renderer{cols: columns(dots), paperDots: dots}
 	b := &r.b
 	b.Write(cmdInit)
 	b.Write(cmdCodePage)
@@ -108,4 +117,4 @@ func (r *renderer) banners(bn Banners) {
 
 // PaperDots is how many dots wide a picture must be for the paper: 576 on
 // 80 mm, 384 on 58 mm.
-func PaperDots(w job.Width) int { return columns(w) * colDots }
+func PaperDots(w job.Width) int { return w.Dots() }

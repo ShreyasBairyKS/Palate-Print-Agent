@@ -65,6 +65,7 @@ type Agent struct {
 	// till in it.
 	StatusFile string
 	Till       string
+	serverURL  string
 
 	printers []api.Printer
 	cfgs     []config.Printer
@@ -86,10 +87,10 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 	if err != nil {
 		return nil, fmt.Errorf("opening ledger %s: %w", cfg.LedgerFile, err)
 	}
-	a := &Agent{Log: log, Ledger: led, StatusFile: cfg.StatusFile, Till: cfg.AgentName, cfgs: cfg.Printers}
+	a := &Agent{Log: log, Ledger: led, StatusFile: cfg.StatusFile, Till: cfg.AgentName, serverURL: cfg.Server, cfgs: cfg.Printers}
 	var qps []queue.Printer
 	for _, p := range cfg.Printers {
-		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Writer: WriterFor(p, cfg.Timings), Backup: p.Backup})
+		qps = append(qps, queue.Printer{ID: p.ID, Name: p.Name, Width: job.Width(p.Width), Dots: p.PrintDots(), Writer: WriterFor(p, cfg.Timings), Backup: p.Backup})
 		a.printers = append(a.printers, api.Printer{ID: p.ID, Name: p.Name, Kind: p.Kind, Width: p.Width})
 	}
 	cl := &cloud.Client{Server: cfg.Server, Store: store, Health: a.health, Log: log, HTTP: newHTTPClient()}
@@ -102,7 +103,7 @@ func New(cfg *config.Config, store pair.Store, log *slog.Logger) (*Agent, error)
 		ProbeEvery:     cfg.Timings.ProbeEvery.D(),
 		IdleCheckEvery: cfg.Timings.IdleCheckEvery.D(),
 		Log:            log,
-		HTML:           &htmlrender.Edge{Path: cfg.EdgePath, WorkDir: cfg.HTMLWorkDir},
+		HTML:           &htmlrender.Edge{Path: cfg.EdgePath, WorkDir: cfg.HTMLWorkDir, PxPerInch: cfg.HTMLPxPerInch},
 	})
 	return a, nil
 }

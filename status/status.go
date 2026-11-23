@@ -46,6 +46,7 @@ type File struct {
 	StartedAt    time.Time `json:"started_at"`
 	AgentVersion string    `json:"agent_version"`
 	Till         string    `json:"till"`
+	ServerURL    string    `json:"server_url,omitempty"` // Palate's server address (no secret)
 	Server       Server    `json:"server"`
 	QueueDepth   int       `json:"queue_depth"`
 	Printers     []Printer `json:"printers"`
@@ -68,6 +69,7 @@ type Printer struct {
 	Kind      string    `json:"kind"`  // "network" or "usb"
 	Where     string    `json:"where"` // its address, or its Windows printer name
 	Width     int       `json:"width"`
+	Dots      int       `json:"dots,omitempty"`   // dots across, when not the paper's usual
 	Backup    string    `json:"backup,omitempty"` // the backup printer's id
 	State     string    `json:"state"`            // "up", "down" or "unknown"
 	LastError string    `json:"last_error,omitempty"`

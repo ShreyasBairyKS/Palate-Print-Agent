@@ -43,7 +43,8 @@ type printerInput struct {
 	Name, ID string
 	USB      bool   // false: network
 	Where    string // IP address (network) or Windows printer name (USB)
-	Width    int    // 58 or 80
+	Width    int    // 58 or 80: the paper class
+	Dots     int    // dots across it prints; 0 means the usual for Width
 	Backup   string // another printer's id, or ""
 }
 
@@ -68,7 +69,7 @@ func makePrinter(raw *config.Config, in printerInput, replacing string) (config.
 	case in.Backup == in.ID && in.Backup != "":
 		return config.Printer{}, errors.New("a printer can't be its own backup")
 	}
-	p := config.Printer{ID: in.ID, Name: in.Name, Width: in.Width, Backup: in.Backup}
+	p := config.Printer{ID: in.ID, Name: in.Name, Width: in.Width, Dots: in.Dots, Backup: in.Backup}
 	if in.USB {
 		p.Kind, p.PrinterName = "usb", in.Where
 	} else {

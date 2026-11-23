@@ -51,6 +51,7 @@ type Printer struct {
 	ID     string
 	Name   string
 	Width  job.Width
+	Dots   int // dots across it prints; 0 means the usual for Width
 	Writer printer.Writer
 	Backup string // id of another printer on this till, or ""
 }
@@ -359,7 +360,11 @@ const (
 // render makes the printer bytes for a job: a kitchen ticket through
 // render.Render, or a document drawn by the HTML renderer and printed as a
 // picture. Banners the server set on the job are kept.
-func (q *Queue) render(ctx context.Context, j job.Job, bn render.Banners, width job.Width) ([]byte, error) {
+func (q *Queue) render(ctx context.Context, j job.Job, bn render.Banners, p Printer) ([]byte, error) {
+	dots := p.Dots
+	if dots == 0 {
+		dots = p.Width.Dots()
+	}
 	if d := j.Document; d != nil {
 		if q.cfg.HTML == nil {
 			return nil, errors.New("this till can't print documents: no HTML renderer")
@@ -368,11 +373,11 @@ func (q *Queue) render(ctx context.Context, j job.Job, bn render.Banners, width 
 			bn.Duplicate = true
 		}
 		bn.MovedFrom = d.MovedFrom
-		img, err := q.cfg.HTML.Render(ctx, d.HTML, render.PaperDots(width))
+		img, err := q.cfg.HTML.Render(ctx, d.HTML, dots)
 		if err != nil {
 			return nil, err
 		}
-		return render.Picture(bn, img, width)
+		return render.PictureDots(bn, img, dots)
 	}
 	slip := j.Slip
 	slip.PlacedAt = slip.PlacedAt.In(q.cfg.Location)
@@ -382,7 +387,7 @@ func (q *Queue) render(ctx context.Context, j job.Job, bn render.Banners, width 
 		slip.Duplicate = true
 		slip.DuplicateReason = bn.DuplicateReason
 	}
-	return render.Render(slip, width)
+	return render.RenderDots(slip, dots)
 }
 
 // process takes one task through the ledger, the renderer and the printer.
@@ -448,7 +453,7 @@ func (q *Queue) process(ctx context.Context, w *worker, t task) (job.Outcome, ne
 		}
 	}
 
-	data, err := q.render(ctx, j, bn, w.p.Width)
+	data, err := q.render(ctx, j, bn, w.p)
 	if err != nil {
 		q.cfg.Log.Error("render failed", "job", j.ID, "printer", w.p.ID, "err", err)
 		o := job.Outcome{Kind: job.Failed, Reason: err.Error()}

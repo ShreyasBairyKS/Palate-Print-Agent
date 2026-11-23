@@ -134,7 +134,7 @@ func (p Printer) Describe() string {
 	if p.Kind == "usb" {
 		where = "Windows printer \"" + p.PrinterName + "\""
 	}
-	s := fmt.Sprintf("%s (%s): %s %s, %d mm", p.ID, p.Name, p.Kind, where, p.Width)
+	s := fmt.Sprintf("%s (%s): %s %s, %s", p.ID, p.Name, p.Kind, where, p.Paper())
 	if p.Backup != "" {
 		s += ", backup " + p.Backup
 	}

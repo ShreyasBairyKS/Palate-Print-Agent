@@ -10,7 +10,7 @@ recovery when the internet drops.
 | File | What it is | For |
 | --- | --- | --- |
 | `HOW-TO-USE.txt` | Step by step: installing on a till, the demo, and what Palate's team needs. Opens in Notepad. | Everyone |
-| `palate-agent.exe` | **The print agent.** Double-click it on a till to open the setup window; it installs as a Windows service. | Restaurants |
+| `palate-agent.exe` | **The print agent.** Double-click it on a till: one window sets it up (it installs as a Windows service), and afterwards shows and changes everything. | Restaurants |
 | `docs/TILL-SETUP.md` | How to install it on a till and its printers, step by step. | Whoever installs it |
 | `docs/SERVER-API.md` | **What Palate's server must provide:** the four endpoints, every field of a kitchen ticket and a bill, the delivery rules, errors, security, and the HTML bill format. | Palate's backend team |
 | `mockpalate.exe` | A mock Palate server that follows `SERVER-API.md` exactly: the reference implementation, and the server for the demo. | Reference and demo |
@@ -21,17 +21,18 @@ recovery when the internet drops.
 
 ## Install it on a till
 
-**Double-click `palate-agent.exe`.** After Windows asks for permission, a
-setup window opens: type Palate's server address, add each printer (it
+**Double-click `palate-agent.exe`.** After Windows asks for permission, its
+window opens: Palate's server address is filled in, add each printer (it
 finds network printers by itself, and a test slip prints on each), enter
 the pairing code, and press **Install and
 start**. It installs the Windows service, pairs and starts it. `docs/TILL-SETUP.md` has the details and the same steps as
 individual commands.
 
-**Afterwards, double-click it again** to see how the printers are: a status
-window shows each printer working or not (and why), the connection to
-Palate, and what to do. It needs no administrator rights, so staff can open
-it.
+**Afterwards, double-click it again**: the same window shows each printer
+working or not (and why), the connection to Palate, and what to do, and
+changes printers, pairs, updates, sends a report to support and removes the
+agent. Looking needs no administrator rights, so staff can open it; buttons
+that change something carry Windows' shield and ask first.
 
 ## See it working (5 minutes, no installation)
 

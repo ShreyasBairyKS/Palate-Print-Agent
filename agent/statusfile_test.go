@@ -68,7 +68,7 @@ func TestStatusFileShowsPrintersAndConnection(t *testing.T) {
 		StatusFile: filepath.Join(dir, status.FileName),
 		Printers: []config.Printer{
 			{ID: "p-pass", Name: "Pass", Kind: "network", Address: off, Width: 80},
-			{ID: "p-bar", Name: "Bar", Kind: "usb", PrinterName: "EPSON TM-T20", Width: 58},
+			{ID: "p-bar", Name: "Bar", Kind: "usb", PrinterName: "EPSON TM-T20", Width: 58, Dots: 360},
 		},
 	}
 	cfg.Timings.RetryGap = config.Duration(10 * time.Millisecond)
@@ -98,6 +98,9 @@ func TestStatusFileShowsPrintersAndConnection(t *testing.T) {
 	}
 	if bar.State != "unknown" || bar.Where != "EPSON TM-T20" {
 		t.Fatalf("Bar = %+v; a USB printer is unknown until it prints", bar)
+	}
+	if bar.Dots != 360 || f.ServerURL != cfg.Server {
+		t.Fatalf("dots %d, server %q; the window shows both without reading the settings", bar.Dots, f.ServerURL)
 	}
 	if f.Till != "FRONT-TILL" || f.AgentVersion != Version || f.Stopped != "" {
 		t.Fatalf("file = %+v", f)

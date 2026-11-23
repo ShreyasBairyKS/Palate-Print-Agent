@@ -154,3 +154,27 @@ func TestCrashMidWriteReprintsDocumentAsDuplicate(t *testing.T) {
 		t.Fatalf("outcome = %+v; want a DUPLICATE reprint marked %s", r.o, CrashRecovery)
 	}
 }
+
+// A printer set to other dots (an Epson TM-T88's 512) gets its bills drawn
+// and printed exactly that wide, and its kitchen tickets too.
+func TestDocumentAtAPrintersOwnDots(t *testing.T) {
+	w := &scriptWriter{confirm: true}
+	html := &fakeHTML{}
+	rec := newRecorder()
+	q := start(t, []Printer{{ID: "bill", Name: "Bill", Width: job.Width80, Dots: 512, Writer: w}}, rec, Config{HTML: html})
+	q.Submit(context.Background(), docJob("d1", "bill", "<p>Total 798.00</p>"))
+	if r := rec.next(t); r.o.Kind != job.Printed {
+		t.Fatalf("outcome = %+v", r.o)
+	}
+	html.mu.Lock()
+	widths := append([]int(nil), html.widths...)
+	html.mu.Unlock()
+	if len(widths) != 1 || widths[0] != 512 {
+		t.Fatalf("drawn at %v; want 512", widths)
+	}
+	data := w.calls[0]
+	i := bytes.Index(data, gsv0)
+	if i < 0 || (int(data[i+4])|int(data[i+5])<<8)*8 != 512 {
+		t.Fatalf("raster isn't 512 dots wide")
+	}
+}

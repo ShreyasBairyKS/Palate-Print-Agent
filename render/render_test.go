@@ -207,7 +207,7 @@ func TestLinesFitThePaper(t *testing.T) {
 				if c.Name != "text" {
 					continue
 				}
-				limit := columns(w)
+				limit := columns(w.Dots())
 				// The station line is double width, so half as many characters fit.
 				if strings.EqualFold(string(c.Raw), strings.ToUpper(mk().Station)) {
 					limit /= 2
@@ -268,8 +268,8 @@ func TestRasterLinesAreInkedAndPaperWide(t *testing.T) {
 				}
 				images++
 				x := int(c.Raw[4]) | int(c.Raw[5])<<8
-				if x*8 != columns(w)*colDots {
-					t.Errorf("%s %s: raster is %d dots wide, paper is %d", name, w, x*8, columns(w)*colDots)
+				if x*8 != w.Dots() {
+					t.Errorf("%s %s: raster is %d dots wide, paper is %d", name, w, x*8, w.Dots())
 				}
 				if !anyInk(c.Raw[8:]) {
 					t.Errorf("%s %s: a raster line has no ink", name, w)

@@ -137,16 +137,12 @@ func cmdUninstall() error {
 	if !service.IsElevated() {
 		return errNeedAdmin
 	}
-	if err := service.Uninstall(); err != nil {
+	kept, err := removeAgent(defaultConfigPath(), false)
+	if err != nil {
 		return err
 	}
-	exe := installedExe()
-	if self, err := os.Executable(); err == nil && !samePath(self, exe) {
-		os.Remove(exe)
-		os.Remove(filepath.Dir(exe))
-	}
 	fmt.Printf("removed the %s service\n", service.DisplayName)
-	fmt.Printf("the data folder (config, credential, ledger, logs) is kept: %s\n", filepath.Dir(defaultConfigPath()))
+	fmt.Printf("the data folder (config, credential, ledger, logs) is kept: %s\n", kept)
 	return nil
 }
 

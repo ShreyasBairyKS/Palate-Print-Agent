@@ -113,6 +113,7 @@ func printerChange(verb string, args []string) error {
 	address := fs.String("address", "", "network printer: private IP address, optionally with :port (default 9100)")
 	usb := fs.String("usb", "", "USB printer: its name in Windows (see palate-agent printers)")
 	width := fs.Int("width", 0, "paper width in mm: 58 or 80")
+	dots := fs.Int("dots", -1, "dots across the printer prints, when not the usual for its width (384 on 58 mm, 576 on 80 mm): 512 for an Epson TM-T88, 832 for 112 mm paper; 0 goes back to the usual")
 	backup := fs.String("backup", "", "id of another printer on this till to use when this one is down, or none")
 	server := fs.String("server", "", "init only: Palate's server, https://...")
 	noTest := fs.Bool("no-test", false, "save without a test print (say, the printer is off right now)")
@@ -167,8 +168,8 @@ func printerChange(verb string, args []string) error {
 		if *name == "" && *address == "" && *usb == "" && *width == 0 && *backup == "" {
 			return errors.New("printer set: nothing to change; give -address, -usb, -width, -name or -backup")
 		}
-		applyFlags(p, *name, *address, *usb, *width, *backup)
-		testNeeded = p.Kind != before.Kind || p.Address != before.Address || p.PrinterName != before.PrinterName || p.Width != before.Width
+		applyFlags(p, *name, *address, *usb, *width, *dots, *backup)
+		testNeeded = p.Kind != before.Kind || p.Address != before.Address || p.PrinterName != before.PrinterName || p.PrintDots() != before.PrintDots()
 	case "add":
 		if !validID.MatchString(id) {
 			return fmt.Errorf("id %q: start with a letter, then letters, digits, - or _ (up to 64)", id)
@@ -180,7 +181,7 @@ func printerChange(verb string, args []string) error {
 			return errors.New("printer add: -name and one of -address or -usb are required")
 		}
 		p := config.Printer{ID: id, Width: 80}
-		applyFlags(&p, *name, *address, *usb, *width, *backup)
+		applyFlags(&p, *name, *address, *usb, *width, *dots, *backup)
 		raw.Printers = append(raw.Printers, p)
 		testNeeded = true
 	case "remove":
@@ -240,7 +241,7 @@ func printerChange(verb string, args []string) error {
 
 // applyFlags sets the fields the flags name. -address makes a printer a
 // network one; -usb makes it a USB one.
-func applyFlags(p *config.Printer, name, address, usb string, width int, backup string) {
+func applyFlags(p *config.Printer, name, address, usb string, width, dots int, backup string) {
 	if name != "" {
 		p.Name = name
 	}
@@ -252,6 +253,12 @@ func applyFlags(p *config.Printer, name, address, usb string, width int, backup 
 	}
 	if width != 0 {
 		p.Width = width
+	}
+	if dots >= 0 {
+		p.Dots = dots
+		if dots > 0 && width == 0 {
+			p.Width = int(job.ClassFor(dots)) // the class Palate knows it by
+		}
 	}
 	switch strings.ToLower(backup) {
 	case "":
@@ -282,7 +289,7 @@ func describeChange(verb string, before, after *config.Printer) string {
 
 // testPrint prints the test slip on one printer.
 func testPrint(p config.Printer, t config.Timings) error {
-	data, err := render.Render(testSlip(p), job.Width(p.Width))
+	data, err := render.RenderDots(testSlip(p), p.PrintDots())
 	if err != nil {
 		return err
 	}
