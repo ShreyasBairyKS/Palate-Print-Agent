@@ -40,7 +40,7 @@ func describeStatus(f status.File, readErr error, svc string, now time.Time) sta
 		// No service, but an agent is running in a terminal: show it.
 	case svc == "":
 		return statusView{Bad: true, Headline: "The print agent isn't installed on this PC",
-			Advice: "Nothing prints from Palate on this till. Ask your manager to set it up: double-click palate-agent.exe and choose Yes when Windows asks."}
+			Advice: "Nothing prints from Palate on this till. Ask your manager to set it up: " + setUpHow + "."}
 	case svc == "starting":
 		return statusView{Headline: "The print agent is starting...", Detail: "This takes a few seconds."}
 	case svc != "running" && svc != "unknown":
@@ -56,7 +56,7 @@ func describeStatus(f status.File, readErr error, svc string, now time.Time) sta
 	case errors.Is(readErr, os.ErrNotExist):
 		return statusView{Headline: "Waiting for the print agent to report...", Detail: "It writes its status a few seconds after it starts."}
 	case errors.Is(readErr, os.ErrPermission):
-		return statusView{Bad: true, Headline: "This Windows account can't read the printer status",
+		return statusView{Bad: true, Headline: "This " + osName + " account can't read the printer status",
 			Advice: "The print agent is running. To see its printers, ask your manager to reinstall it with this version, which lets every account read the status."}
 	case readErr != nil:
 		return statusView{Bad: true, Headline: "The printer status can't be read", Detail: readErr.Error()}

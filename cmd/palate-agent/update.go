@@ -206,6 +206,7 @@ func removeAgent(cfgPath string, deleteData bool) (kept string, err error) {
 		return "", err
 	}
 	exe := installedExe()
+	unlinkCommand(exe)
 	if self, err := os.Executable(); err == nil && samePath(self, exe) {
 		// Running from Program Files: Windows deletes it at the next restart.
 		removeAtRestart(exe)
@@ -220,7 +221,7 @@ func removeAgent(cfgPath string, deleteData bool) (kept string, err error) {
 	}
 	// Only ever delete the agent's own folder, never one a custom -config
 	// pointed somewhere else.
-	if !strings.EqualFold(filepath.Base(dataDir), "PalatePrintAgent") {
+	if !strings.EqualFold(filepath.Base(dataDir), filepath.Base(filepath.Dir(defaultConfigPath()))) {
 		return dataDir, fmt.Errorf("removed the program, but kept %s: it isn't the agent's own folder", dataDir)
 	}
 	if err := os.RemoveAll(dataDir); err != nil {

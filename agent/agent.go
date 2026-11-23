@@ -182,7 +182,7 @@ func CheckUSB(cfg *config.Config, log *slog.Logger) {
 	}
 	seen, err := usbprinter.List()
 	if err != nil {
-		log.Warn("could not list Windows printers", "err", err)
+		log.Warn("could not list the system's printers", "err", err)
 		return
 	}
 	for _, name := range want {

@@ -72,6 +72,9 @@ func Save(path string, c *Config) error {
 	if err := tmp.Close(); err != nil {
 		return writeErr(err)
 	}
+	if err := handToService(tmp.Name()); err != nil {
+		return writeErr(err)
+	}
 	if old, err := os.ReadFile(path); err == nil {
 		if err := os.WriteFile(path+".previous", old, 0o600); err != nil {
 			return writeErr(err)
@@ -84,9 +87,9 @@ func Save(path string, c *Config) error {
 }
 
 // ErrNeedAdmin means the config folder can't be written by this account.
-// The data folder is closed to everyone but SYSTEM, Administrators and the
-// service, so changes are made from a terminal run as administrator.
-var ErrNeedAdmin = errors.New("can't write the config: run this from a terminal opened with \"Run as administrator\"")
+// The data folder is closed to everyone but administrators and the service,
+// so changes are made with administrator rights (needAdminHow says how).
+var ErrNeedAdmin = errors.New("can't write the config: " + needAdminHow)
 
 func writeErr(err error) error {
 	if errors.Is(err, os.ErrPermission) {

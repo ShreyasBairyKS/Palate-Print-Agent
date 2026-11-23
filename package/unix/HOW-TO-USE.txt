@@ -1,0 +1,104 @@
+Palate print agent for Linux and macOS
+======================================
+
+The agent runs in the background on this computer and prints Palate's
+kitchen tickets and customer bills on its receipt printers. It only
+connects out to Palate's server; it opens no ports.
+
+Setting it up takes about five minutes in a terminal. There is no window
+on Linux and macOS yet: everything is a command, and the commands say in
+plain words what is wrong and what to do.
+
+
+Before you start
+----------------
+- A pairing code: in the Palate portal choose "Add a till" (it expires
+  in 10 minutes, so get it when setup asks for it).
+- Each printer's IP address (network printers). To find it, hold the
+  printer's feed button while switching it on: it prints its address.
+  USB printers: add the printer in this computer's printer settings
+  first (any driver; the agent sends it raw), or use /dev/usb/lp0 on Linux.
+- Customer bills are drawn by a Chromium browser: Google Chrome, Chromium
+  or Microsoft Edge must be installed. Kitchen tickets print without one.
+  On Ubuntu, use Google Chrome or Edge: Ubuntu's Chromium "snap" can't
+  be used. For Kannada and other Indian scripts on bills, install Noto
+  fonts too (Ubuntu or Debian: sudo apt install fonts-noto-core).
+
+
+macOS
+-----
+1. Double-click the downloaded .tar.gz to unpack it.
+
+2. Once only: macOS blocks programs downloaded from the internet that
+   don't come from a registered Apple developer. Open Terminal, type
+       xattr -dr com.apple.quarantine 
+   (with a space at the end), drag the unpacked folder into the Terminal
+   window, and press Return.
+
+3. Double-click "Set up Palate print agent.command". Terminal opens and
+   asks for this Mac's password (nothing shows as you type; that's
+   normal), then asks about Palate's server (press Return for the one it
+   shows), each printer (each one prints a test slip), and the pairing
+   code.
+
+Which download: the one ending macos-arm64 for Macs with Apple chips
+(M1 and later), macos-amd64 for older Intel Macs.
+
+
+Linux
+-----
+1. Unpack it and go into its folder:
+       tar xzf palate-print-agent-*-linux-amd64.tar.gz
+       cd palate-print-agent-*-linux-amd64
+2. Run setup:
+       sudo ./palate-agent setup
+   It asks about Palate's server (press Enter for the one it shows),
+   each printer (each prints a test slip) and the pairing code.
+
+Which download: linux-amd64 for ordinary PCs; linux-arm64 for a
+Raspberry Pi with 64-bit Raspberry Pi OS; linux-armv7 for 32-bit.
+The agent needs systemd (Ubuntu, Debian, Raspberry Pi OS, Fedora and
+most others have it).
+
+
+Every day
+---------
+Setup installs the command, so afterwards it works from any folder:
+
+  palate-agent status           Is it running? Each printer working or not, and why,
+                                and the last lines of its log.
+  palate-agent support          A report for Palate support: printed, and saved as a
+                                file (on the Desktop when there is one). Send that file.
+  sudo palate-agent printer list | add | set | remove
+                                Change this computer's printers (each change is test-printed).
+  sudo palate-agent stop        Stop printing (it starts again when the computer starts).
+  sudo palate-agent start
+  sudo palate-agent uninstall   Remove it. Its settings and pairing are kept, so setting
+                                it up again carries on where it left off.
+
+A newer version: unpack it, go into its folder, and run
+  sudo ./palate-agent update
+Printers, settings and pairing are kept; printing pauses for a few seconds.
+
+
+Where things are
+----------------
+                 Linux                                macOS
+  program        /opt/palate-print-agent/             /usr/local/palate-print-agent/
+  settings, log  /var/lib/palate-print-agent/         /Library/Application Support/PalatePrintAgent/
+  service        systemd: palate-print-agent.service  launchd: com.palate.print-agent
+  runs as        its own user, palate-agent           root
+
+The pairing key is encrypted so that it only works on this computer, and
+the settings folder can only be opened by the agent and administrators.
+
+
+Problems
+--------
+- "this needs administrator rights": put sudo in front of the command.
+- A printer shows NOT WORKING in palate-agent status: do what it says
+  (paper, power, cable, IP address).
+- Bills don't print but kitchen tickets do: install Google Chrome (see
+  "Before you start"), then: sudo palate-agent stop, sudo palate-agent start.
+- Anything else: run palate-agent support and send the file it saves to
+  Palate support.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"os"
@@ -111,7 +112,7 @@ func TestSupportReport(t *testing.T) {
 	})
 	for _, want := range []string{
 		"22 Nov 2026", "Windows 10.0.26200", "Service:       running",
-		"Edge check:    PROBLEM", "227 dots",
+		fmt.Sprintf("%-15sPROBLEM", browserShort+" check:"), "227 dots",
 		"FRONT-TILL", "NOT connected", "error code: dns", "no such host",
 		"Bar (p-bar) at 192.168.0.87:9100, 80 mm: down", "error code: paper out",
 		"server: " + config.DefaultServer, "printer: p-bar (Bar)", "line two",
@@ -139,7 +140,7 @@ func TestSupportReportEdgeOK(t *testing.T) {
 		edgeFind:  func() (string, error) { return `C:\Edge\msedge.exe`, nil },
 		edgeCheck: func(string) (int, error) { return 481, nil },
 	})
-	for _, want := range []string{"Service:       not installed", "Edge check:    OK", "Settings:      not included (there isn't one yet)"} {
+	for _, want := range []string{"Service:       not installed", fmt.Sprintf("%-15sOK", browserShort+" check:"), "Settings:      not included (there isn't one yet)"} {
 		if !strings.Contains(r, want) {
 			t.Errorf("report lacks %q:\n%s", want, r)
 		}

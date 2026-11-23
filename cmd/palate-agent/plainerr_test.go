@@ -30,7 +30,7 @@ func TestExplainKeepsTheCode(t *testing.T) {
 		{&printer.Error{Kind: printer.Refused, Err: errors.New("x")}, "refused", "IP address"},
 		{&net.DNSError{Err: "no such host", Name: "plexus.example"}, "dns: plexus.example", "internet"},
 		{context.DeadlineExceeded, "timeout", "didn't answer"},
-		{config.ErrNeedAdmin, "access denied", "choose Yes"},
+		{config.ErrNeedAdmin, "access denied", sayAdmin},
 		{errors.New("dial tcp 1.2.3.4:443: connectex: No connection could be made because the target machine actively refused it."), "connection refused", "internet"},
 	} {
 		p := explain(c.err)

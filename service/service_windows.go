@@ -109,6 +109,10 @@ func execute(fn func(ctx context.Context) error, req <-chan svc.ChangeRequest, s
 	}
 }
 
+// PrepareAccount does nothing on Windows: the virtual account exists once
+// the service does, and the data folder's access list names the service.
+func PrepareAccount(string) error { return nil }
+
 // Install registers the service to run exe with the given arguments, as
 // account (VirtualAccount or LocalSystem), starting with Windows and
 // restarting after failures. It does not start it.

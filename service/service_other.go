@@ -1,42 +1,22 @@
-//go:build !windows
+//go:build !windows && !linux && !darwin
 
-// Package service runs the agent as a Windows service. Other systems have
-// no service support yet.
 package service
 
-import (
-	"context"
-	"errors"
-	"log/slog"
-)
+// Other systems have no service support: run "palate-agent run" from the
+// system's own startup mechanism.
+
+import "errors"
 
 const (
-	Name           = "PalatePrintAgent"
-	DisplayName    = "Palate Print Agent"
-	VirtualAccount = `NT SERVICE\` + Name
-	LocalSystem    = "LocalSystem"
+	VirtualAccount = "root"
+	LocalSystem    = "root"
 )
 
-var (
-	ErrNotInstalled = errors.New("the Palate Print Agent service is not installed")
-	errUnsupported  = errors.New("running as a service is only supported on Windows")
-)
+var errUnsupported = errors.New("installing the service is supported on Windows, Linux (systemd) and macOS; run \"palate-agent run\" from this system's startup mechanism instead")
 
-type Info struct {
-	State       string
-	PID         uint32
-	Account     string
-	Command     string
-	AutoStart   bool
-	LastExitErr string
-}
-
-func IsService() (bool, error)                                { return false, nil }
-func Run(func(ctx context.Context) error, *slog.Logger) error { return errUnsupported }
-func Install(string, []string, string) error                  { return errUnsupported }
-func Uninstall() error                                        { return errUnsupported }
-func Start() error                                            { return errUnsupported }
-func Stop() error                                             { return errUnsupported }
-func Status() (Info, error)                                   { return Info{}, errUnsupported }
-
-func IsElevated() bool { return false }
+func PrepareAccount(string) error            { return nil }
+func Install(string, []string, string) error { return errUnsupported }
+func Uninstall() error                       { return ErrNotInstalled }
+func Start() error                           { return errUnsupported }
+func Stop() error                            { return errUnsupported }
+func Status() (Info, error)                  { return Info{}, ErrNotInstalled }

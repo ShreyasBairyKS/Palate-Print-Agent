@@ -1,8 +1,9 @@
 # palate-print-agent
 
-The Palate print agent: a Go service on the restaurant's Windows till that
-polls Palate's cloud for print jobs and writes each station's ticket to its
-printer, the moment an order is confirmed.
+The Palate print agent: a Go service on the restaurant's till (Windows, or
+Linux and macOS from the terminal) that polls Palate's cloud for print jobs
+and writes each station's ticket to its printer, the moment an order is
+confirmed.
 
 **Status: M4 in progress: the Windows service, customer bills (HTML), local printer changes and the handover package are done; signed updates are next.**
 
@@ -94,16 +95,16 @@ printers` lists it. `REAL_WIDTH` is the paper width in mm (58 or 80; default
 | `render/` | paper | `Render(slip, width)` at 58/80 mm: text in WPC1252, or raster for Kannada, Devanagari and Tamil; golden tests and PNG previews in `testdata/` |
 | `render/fonts/` | paper | Bundled Noto fonts (OFL), embedded in the binary |
 | `render/picture.go` | paper | `Picture(banners, image, width)`: a document already drawn as an image, printed as raster bands with the same banners as a ticket |
-| `htmlrender/` | paper | Draws an HTML document (a customer bill) at the paper's width with headless Microsoft Edge, locked down: no scripts, network or files |
+| `htmlrender/` | paper | Draws an HTML document (a customer bill) at the paper's width with headless Microsoft Edge (Linux and macOS: Edge, Google Chrome or Chromium), locked down: no scripts, network or files |
 | `ledger/` | wire | The printed-ID ledger: Attempting/Done per job, DPAPI-protected, append-only, 7-day retention |
 | `source/cloud/` | wire | Long-poll Fetch, Report, printer registration, credential rotation, refusing hostile jobs |
 | `pair/` | wire | Redeem a pairing code; the credential is stored with DPAPI at machine scope |
-| `internal/dpapi/` | wire | DPAPI at machine scope through crypt32.dll |
+| `internal/dpapi/` | wire | DPAPI at machine scope through crypt32.dll; on Linux and macOS, AES-256-GCM with a key derived from the machine id, so the files only decrypt on this computer |
 | `internal/fileacl/` | wire | Locks the credential and ledger files to SYSTEM, Administrators and the agent's account (DPAPI at machine scope alone would let any account on the till decrypt them) |
 | `config/` | wire | The till's local config: server, printers and addresses, timings |
 | `printer/` | wire | The `Writer` interface and failure kinds (refused, hang, partial, paper out) |
 | `printer/net/` | wire | Raw TCP 9100 writer with a DLE EOT status check |
-| `printer/usb/` | wire | Windows spooler writer, datatype RAW |
+| `printer/usb/` | wire | Windows spooler writer, datatype RAW; on Linux and macOS, CUPS (`lp -o raw`) or a `/dev/usb/lp*` device |
 | `printer/discover/` | | Finds receipt printers for setup: this PC's private /24 networks on port 9100, Windows' TCP/IP printer ports, and an ESC/POS status query to tell receipt printers from other devices. Only on request; the service never scans |
 | `queue/` | wire | One serial queue per printer: ledger, render, write, retry fast failures, failure ladder to the backup, probing down printers, report |
 | `agent/` | wire | The poll loop, watchdog, health payload, and backoff with jitter |
@@ -373,6 +374,42 @@ Config rules:
 | `delayed_after` | 10m | Older jobs print with a DELAYED banner |
 | `probe_every` | 30s | How often a down network printer is checked |
 | `idle_check_every` | 1m | How often an idle network printer is checked (a connection and a status question, never printing), so a printer switched off or out of paper between orders is seen before the next ticket. The first check is 3 s after the start. `-1s` turns it off |
+
+### Linux and macOS
+
+The same program builds for Linux (amd64, arm64, armv7: PCs and Raspberry
+Pis) and macOS (Intel and Apple chips); `scripts/package.sh` makes a
+`.tar.gz` for each, with `package/unix/HOW-TO-USE.txt`. There is no window
+there yet: `sudo ./palate-agent setup` asks the same questions in the
+terminal (run without sudo, it reruns itself through sudo), and every other
+command works as on Windows, with `sudo` in place of "Run as administrator".
+`palate-agent support` saves the support report as a file.
+
+| | Linux | macOS |
+|---|---|---|
+| Service | systemd unit `palate-print-agent.service`, restarted on failure | launchd daemon `com.palate.print-agent` in /Library/LaunchDaemons, restarted on failure |
+| Runs as | its own system user `palate-agent` (in the `lp` group), or root with `-account localsystem` | root |
+| Program | /opt/palate-print-agent/palate-agent | /usr/local/palate-print-agent/palate-agent |
+| Data | /var/lib/palate-print-agent/ (0711: the status file is readable by name, nothing else) | /Library/Application Support/PalatePrintAgent/ |
+| Command | /usr/local/bin/palate-agent links to the program | the same |
+| USB printers | a CUPS printer name (sent with `lp -o raw`), or `/dev/usb/lp0` | a CUPS printer name |
+| Bills | Edge, Google Chrome or Chromium (not Ubuntu's snap) | Edge, Google Chrome or Chromium in /Applications |
+
+The pairing credential and the ledger are encrypted with a key derived from
+the machine id (`/etc/machine-id`, or the Mac's hardware UUID), the
+counterpart of DPAPI at machine scope: copied to another computer they don't
+decrypt; root on this one can read them, as an administrator can on Windows.
+Files written with sudo (`printer set`, `pair`) are handed to the service's
+user. Where the browser runs as root (macOS, or `-account localsystem`),
+Chromium needs `--no-sandbox`; the document is still locked down and can
+reach no network. macOS builds are not signed or notarised (that needs an
+Apple Developer account), so a downloaded copy must be let through once:
+`xattr -dr com.apple.quarantine <folder>`.
+
+Checked on Linux: the test suite (in WSL Ubuntu), and install, pair, a
+test print and an order printed through the systemd service, status as an
+ordinary user, stop, start, support and uninstall. Not checked yet: macOS
+on a Mac, CUPS and USB printers, and bills drawn by Chrome on Linux.
 
 ### What happens to a ticket
 

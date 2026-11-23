@@ -63,12 +63,12 @@ func supportReport(e reportEnv) string {
 			line("Installed:     %s", l)
 		}
 	}
-	line("Windows:       %s", e.windows)
+	line("%-15s%s", osName+":", e.windows)
 
 	svcState := ""
 	if info, err := e.svc(); err == nil {
 		svcState = info.State
-		line("Service:       %s (starts with Windows: %v, account %s)", info.State, info.AutoStart, info.Account)
+		line("Service:       %s (%s: %v, account %s)", info.State, startsWith, info.AutoStart, info.Account)
 		if info.LastExitErr != "" {
 			line("               %s", info.LastExitErr)
 		}
@@ -76,24 +76,24 @@ func supportReport(e reportEnv) string {
 		line("Service:       not installed")
 	} else {
 		svcState = "unknown"
-		line("Service:       couldn't ask Windows (%v)", err)
+		line("Service:       couldn't ask %s (%v)", osName, err)
 	}
 
 	// Microsoft Edge draws the bills: its version, and whether it draws them
 	// at full size here (the half-size problem shows up as about 227 dots).
 	if edge, err := e.edgeFind(); err != nil {
-		line("Edge:          not found (%v). Bills can't print.", err)
+		line("%-15snot found (%v). Bills can't print.", browserShort+":", err)
 	} else {
-		line("Edge:          %s (%s)", edgeVersion(edge), edge)
+		line("%-15s%s (%s)", browserShort+":", edgeVersion(edge), edge)
 		if e.edgeCheck != nil {
 			dots, err := e.edgeCheck(edge)
 			switch {
 			case err != nil:
-				line("Edge check:    failed: %s", explain(err).String())
+				line("%-15sfailed: %s", browserShort+" check:", explain(err).String())
 			case dots >= edgeCheckDots-8 && dots <= edgeCheckDots+8:
-				line("Edge check:    OK. A %d mm line drew %d dots wide (%d expected).", edgeCheckMM, dots, edgeCheckDots)
+				line("%-15sOK. A %d mm line drew %d dots wide (%d expected).", browserShort+" check:", edgeCheckMM, dots, edgeCheckDots)
 			default:
-				line("Edge check:    PROBLEM. A %d mm line drew %d dots wide; %d expected, so bills print at the wrong size.", edgeCheckMM, dots, edgeCheckDots)
+				line("%-15sPROBLEM. A %d mm line drew %d dots wide; %d expected, so bills print at the wrong size.", browserShort+" check:", edgeCheckMM, dots, edgeCheckDots)
 			}
 		}
 	}
@@ -275,7 +275,7 @@ func makeSupportReport(cfgPath string) string {
 			case err != nil:
 				return ""
 			case strings.HasPrefix(c.Installed, "missing"):
-				return "not in Program Files"
+				return "not in " + filepath.Dir(installedExe())
 			case !c.Different:
 				return "this file is the installed program"
 			}

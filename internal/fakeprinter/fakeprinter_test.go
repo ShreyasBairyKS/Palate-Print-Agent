@@ -102,13 +102,17 @@ func TestNormalAnswersStatusQueries(t *testing.T) {
 
 func TestRefuseResets(t *testing.T) {
 	addr, done := start(t, Config{Mode: Refuse})
-	c := dial(t, addr)
+	c, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		// The reset can arrive while connecting (Linux): refused all the same.
+		return
+	}
+	defer c.Close()
 	next(t, done)
 	c.SetDeadline(time.Now().Add(2 * time.Second))
 	// After an RST, a read returns an error rather than a clean EOF on most
 	// stacks; either way nothing is ever printed.
-	_, err := c.Read(make([]byte, 1))
-	if err == nil {
+	if _, err := c.Read(make([]byte, 1)); err == nil {
 		t.Fatal("read succeeded on a refused connection")
 	}
 }

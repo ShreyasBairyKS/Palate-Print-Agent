@@ -26,7 +26,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"time"
 
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/agent"
@@ -38,14 +37,6 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/service"
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
-
-func defaultConfigPath() string {
-	base := os.Getenv("ProgramData")
-	if base == "" {
-		base = "."
-	}
-	return filepath.Join(base, "PalatePrintAgent", "agent.json")
-}
 
 // cmdMonitor opens the print agent's window on an installed till (no
 // administrator rights needed to look), or says the same in the console
@@ -89,6 +80,7 @@ commands:
   monitor     open the window: each printer working or not, the connection to Palate, and changes
               (what double-clicking palate-agent.exe shows once the agent is installed)
   status      show whether the service is running, its printers, and recent log lines
+  support     make a report for Palate support (saved as a file, and printed)
   start       start the service (as administrator)
   stop        stop the service, letting tickets in hand finish (as administrator)
   update      replace the installed program with this one, keeping its settings (as administrator)
@@ -141,6 +133,8 @@ func main() {
 		err = cmdMonitor(args)
 	case "update":
 		err = cmdUpdate(args)
+	case "support":
+		err = cmdSupport(args)
 	case "version":
 		fmt.Println(versionLine())
 	default:
@@ -165,11 +159,13 @@ func cmdPrinters() error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Windows printers visible to this process (use one as printer_name for a usb printer):")
+	fmt.Println(capitalize(printerSystem) + " visible to this process (use one as printer_name for a usb printer):")
 	for _, n := range names {
 		fmt.Println("  " + n)
 	}
-	fmt.Println("The service runs as its own account (NT SERVICE\\PalatePrintAgent), which sees only printers installed for all users.")
+	if osName == "Windows" {
+		fmt.Println("The service runs as its own account (NT SERVICE\\PalatePrintAgent), which sees only printers installed for all users.")
+	}
 	return nil
 }
 

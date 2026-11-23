@@ -97,15 +97,15 @@ func cmdSetup(args []string, log *slog.Logger, doubleClicked bool) error {
 
 	if !service.IsElevated() && !*noElevate {
 		fmt.Println("Palate print agent setup needs administrator rights.")
-		fmt.Println("Windows will ask you to allow it; setup continues in a new window.")
+		fmt.Println(elevateSay)
 		again := []string{"setup", "-config", *path}
 		if *window {
 			again = append(again, "-gui")
-		} else {
+		} else if pauseAfterElevate {
 			again = append(again, "-pause")
 		}
 		if err := relaunchElevated(again); err != nil {
-			return finish(fmt.Errorf("couldn't get administrator rights (%v). Right-click palate-agent.exe and choose \"Run as administrator\"", err))
+			return finish(fmt.Errorf("couldn't get administrator rights (%v). %s", err, elevateFailHow))
 		}
 		return nil
 	}
@@ -178,7 +178,7 @@ func (e *setupEnv) steps() error {
 				e.say("  %s", p.Describe())
 			}
 		}
-		e.say("\nTo change a printer:  palate-agent printer set <id> -address <IP>   (as administrator)")
+		e.say("\nTo change a printer:  palate-agent printer set <id> -address <IP>   " + asAdmin)
 		e.say("To see the log:       palate-agent status")
 		e.say("To remove it:         palate-agent uninstall")
 		return nil
@@ -186,11 +186,11 @@ func (e *setupEnv) steps() error {
 		return fmt.Errorf("checking for an existing installation: %w", err)
 	}
 
-	if _, err := e.edgeFind(); err == nil {
-		e.say("\nMicrosoft Edge: found (it draws customer bills).")
+	if p, err := e.edgeFind(); err == nil {
+		e.say("\n%s: found (it draws customer bills).", browserLabel(p))
 	} else {
-		e.say("\nMicrosoft Edge wasn't found. Kitchen tickets will print, but customer bills can't")
-		e.say("until Edge is installed or edge_path is set in the config.")
+		e.say("\n%s wasn't found. Kitchen tickets will print, but customer bills can't", capitalize(browserName))
+		e.say("until one is installed or edge_path is set in the config.")
 	}
 
 	// 1. The config: use one that exists, or build it.
@@ -214,7 +214,7 @@ func (e *setupEnv) steps() error {
 	}
 
 	// 2. The service.
-	e.say("\nStep 3 of 5: installing the Windows service...")
+	e.say("\nStep 3 of 5: installing " + serviceWords + "...")
 	if err := e.install(e.cfgPath); err != nil {
 		return err
 	}
@@ -228,7 +228,7 @@ func (e *setupEnv) steps() error {
 		for {
 			code := e.ask("Pairing code (or press Enter to pair later): ")
 			if code == "" {
-				e.say("\nNot paired yet. When you have a code, run as administrator:")
+				e.say("\nNot paired yet. When you have a code, run " + strings.Trim(asAdmin, "()") + ":")
 				e.say("  palate-agent pair -code <code>")
 				e.say("  palate-agent start")
 				return nil
@@ -248,10 +248,10 @@ func (e *setupEnv) steps() error {
 	if err := e.start(); err != nil {
 		return fmt.Errorf("installed and paired, but starting failed: %w (try: palate-agent start)", err)
 	}
-	e.say("\nDone. The print agent is running and starts with Windows.")
+	e.say("\nDone. The print agent is running and " + startsWith + ".")
 	e.say("  Tickets and bills print as soon as Palate sends them.")
 	e.say("  Check it any time:   palate-agent status")
-	e.say("  Change a printer:    palate-agent printer set <id> -address <IP>   (as administrator)")
+	e.say("  Change a printer:    palate-agent printer set <id> -address <IP>   " + asAdmin)
 	e.say("  Its log:             %s", logPath(e.cfgPath))
 	return nil
 }

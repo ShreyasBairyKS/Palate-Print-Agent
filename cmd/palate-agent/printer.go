@@ -36,13 +36,13 @@ const printerUsage = `usage: palate-agent printer <list|find|set|add|remove> [id
 
   printer list
   printer find [-identify]     look for receipt printers on this PC's network
-  printer set <id> [-address IP[:port] | -usb "Windows printer name"] [-width 58|80] [-name NAME] [-backup ID|none]
-  printer add <id> -name NAME (-address IP[:port] | -usb "Windows printer name") [-width 58|80] [-backup ID]
+  printer set <id> [-address IP[:port] | -usb "` + printerNameHint + `"] [-width 58|80] [-name NAME] [-backup ID|none]
+  printer add <id> -name NAME (-address IP[:port] | -usb "` + printerNameHint + `") [-width 58|80] [-backup ID]
   printer remove <id>
 
 Every change is test-printed before it is saved (-no-test skips that), then
-the service is restarted so it takes effect (-no-restart skips that). Run it
-from a terminal opened with "Run as administrator".
+the service is restarted so it takes effect (-no-restart skips that). It
+needs administrator rights: ` + adminHint + `.
 
 Which station prints on which printer, and what each station cooks, are set
 in Palate, not here. A printer's id can't be changed: Palate's jobs name it.`
@@ -111,7 +111,7 @@ func printerChange(verb string, args []string) error {
 	path := fs.String("config", defaultConfigPath(), "path to agent.json")
 	name := fs.String("name", "", "printer name, as printed on BACKUP FOR banners")
 	address := fs.String("address", "", "network printer: private IP address, optionally with :port (default 9100)")
-	usb := fs.String("usb", "", "USB printer: its name in Windows (see palate-agent printers)")
+	usb := fs.String("usb", "", "USB printer: its "+printerNameHint+" (see palate-agent printers)")
 	width := fs.Int("width", 0, "paper width in mm: 58 or 80")
 	dots := fs.Int("dots", -1, "dots across the printer prints, when not the usual for its width (384 on 58 mm, 576 on 80 mm): 512 for an Epson TM-T88, 832 for 112 mm paper; 0 goes back to the usual")
 	backup := fs.String("backup", "", "id of another printer on this till to use when this one is down, or none")
@@ -345,7 +345,7 @@ func restartService(cfgPath string) string {
 		return "the service is " + info.State + "; the change takes effect when it starts"
 	}
 	if !service.IsElevated() {
-		return "restart the service as administrator for the change to take effect: palate-agent stop, then palate-agent start"
+		return "restart the service " + asAdmin + " for the change to take effect: palate-agent stop, then palate-agent start"
 	}
 	if err := service.Stop(); err != nil {
 		return "couldn't stop the service (" + err.Error() + "); restart it with palate-agent stop, then palate-agent start"

@@ -71,8 +71,9 @@ const PrinterDPI = 203.2
 // WebPxPerInch is CSS's own pixel: 96 to the inch.
 const WebPxPerInch = 96.0
 
-// ErrNoEdge means Microsoft Edge wasn't found on this till.
-var ErrNoEdge = errors.New("htmlrender: Microsoft Edge not found; set edge_path in the config")
+// ErrNoEdge means no browser to draw with was found on this till: Microsoft
+// Edge on Windows; Edge, Google Chrome or Chromium on Linux and macOS.
+var ErrNoEdge = errors.New("htmlrender: " + noBrowser + "; set edge_path in the config")
 
 // Render draws doc widthDots wide and returns the picture, trimmed below the
 // last ink so no paper is wasted. A document taller than MaxHeight is refused
@@ -207,7 +208,8 @@ func (e *Edge) shoot(ctx context.Context, exe, dir string, pass int, page string
 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, exe, Args(windowW, windowH, scale, shotPath, filepath.Join(dir, fmt.Sprintf("profile-%d", pass)), fileURL(pagePath))...)
+	args := Args(windowW, windowH, scale, shotPath, filepath.Join(dir, fmt.Sprintf("profile-%d", pass)), fileURL(pagePath))
+	cmd := exec.CommandContext(ctx, exe, append(platformArgs(), args...)...)
 	var stderr tailBuffer
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
@@ -501,14 +503,7 @@ func (e *Edge) edgePath() (string, error) {
 		}
 		return e.Path, nil
 	}
-	var dirs []string
-	for _, v := range []string{"ProgramFiles(x86)", "ProgramFiles", "LocalAppData"} {
-		if d := os.Getenv(v); d != "" {
-			dirs = append(dirs, d)
-		}
-	}
-	for _, d := range dirs {
-		p := filepath.Join(d, "Microsoft", "Edge", "Application", "msedge.exe")
+	for _, p := range browserCandidates() {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
@@ -517,7 +512,11 @@ func (e *Edge) edgePath() (string, error) {
 }
 
 func fileURL(path string) string {
-	return (&url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(path)}).String()
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p // C:/... on Windows
+	}
+	return (&url.URL{Scheme: "file", Path: p}).String()
 }
 
 // removeAll deletes a work folder. Edge's helper processes can hold files for

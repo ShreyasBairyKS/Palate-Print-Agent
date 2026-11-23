@@ -22,22 +22,12 @@ import (
 	"github.com/ShreyasBairyKS/Palate-Print-Agent/status"
 )
 
-var errNeedAdmin = errors.New("this needs administrator rights: open a terminal with \"Run as administrator\" and run it again")
+var errNeedAdmin = errors.New("this needs administrator rights: " + adminHint)
 
 // logPath is where the service writes its log: logs\agent.log beside the
 // config.
 func logPath(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), "logs", "agent.log")
-}
-
-// installedExe is where install puts the program: a service account can't
-// read files in a user's folders (Desktop, Downloads, OneDrive).
-func installedExe() string {
-	base := os.Getenv("ProgramFiles")
-	if base == "" {
-		base = `C:\Program Files`
-	}
-	return filepath.Join(base, "PalatePrintAgent", "palate-agent.exe")
 }
 
 func cmdInstall(args []string) error {
@@ -83,10 +73,17 @@ func installService(path, account string, start bool) error {
 		}
 	}
 
-	// The program goes to Program Files.
+	// The program goes to Program Files (Linux: /opt, macOS: /usr/local).
 	exe := installedExe()
 	if err := copySelf(exe); err != nil {
 		return fmt.Errorf("install: copying the program to %s: %w", exe, err)
+	}
+	linkCommand(exe)
+
+	// The service's own account must exist before it is given the data
+	// folder (Linux makes a system user for it).
+	if err := service.PrepareAccount(acct); err != nil {
+		return fmt.Errorf("install: %w", err)
 	}
 
 	// The data folder: only SYSTEM, Administrators and the service may open
@@ -96,7 +93,7 @@ func installService(path, account string, start bool) error {
 	if err := fileacl.RestrictDir(dataDir); err != nil {
 		return fmt.Errorf("install: %w", err)
 	}
-	for _, f := range []string{cfg.CredentialFile, cfg.LedgerFile} {
+	for _, f := range append([]string{cfg.CredentialFile, cfg.LedgerFile}, dataFilesForService(cfgPath)...) {
 		if _, err := os.Stat(f); err == nil {
 			if err := fileacl.Restrict(f); err != nil {
 				return fmt.Errorf("install: %w", err)
@@ -112,8 +109,8 @@ func installService(path, account string, start bool) error {
 	fmt.Printf("  config:   %s\n", cfgPath)
 	fmt.Printf("  log:      %s\n", logPath(cfgPath))
 	fmt.Printf("  account:  %s\n", acct)
-	fmt.Println("  starts with Windows; restarts after a failure (5 s, 30 s, 60 s)")
-	if hasUSB(cfg) && acct == service.VirtualAccount {
+	fmt.Println("  " + startsWith + "; restarts after a failure")
+	if hasUSB(cfg) && acct == service.VirtualAccount && osName == "Windows" {
 		fmt.Println("  note: USB printers must be installed for all users. If the log says the service")
 		fmt.Println("        can't see one, reinstall with -account localsystem.")
 	}
@@ -188,7 +185,7 @@ func cmdStatus(args []string) error {
 		fmt.Printf("  process:    %d\n", info.PID)
 	}
 	fmt.Printf("  account:    %s\n", info.Account)
-	fmt.Printf("  starts with Windows: %v\n", info.AutoStart)
+	fmt.Printf("  %s: %v\n", startsWith, info.AutoStart)
 	fmt.Printf("  command:    %s\n", info.Command)
 	if info.LastExitErr != "" {
 		fmt.Printf("  %s\n", info.LastExitErr)
@@ -206,7 +203,7 @@ func cmdStatus(args []string) error {
 				fmt.Println("  " + l)
 			}
 		case errors.Is(err, os.ErrPermission):
-			fmt.Println("\nthe log is readable by administrators only; run this as administrator to see it")
+			fmt.Println("\nthe log is readable by administrators only; " + adminHint + " to see it")
 		}
 	}
 	return nil
@@ -252,21 +249,6 @@ func hasUSB(cfg *config.Config) bool {
 	return false
 }
 
-// inUserFolder reports whether path is under the folder holding users'
-// profiles (C:\Users).
-func inUserFolder(path string) bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-	users := strings.ToLower(filepath.Dir(home)) + string(filepath.Separator)
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		return false
-	}
-	return strings.HasPrefix(strings.ToLower(abs), users)
-}
-
 func samePath(a, b string) bool {
 	aa, err1 := filepath.Abs(a)
 	bb, err2 := filepath.Abs(b)
@@ -301,6 +283,9 @@ func copySelf(dst string) error {
 		return err
 	}
 	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), dst)

@@ -29,7 +29,7 @@ type Writer struct {
 
 var _ printer.Writer = (*Writer)(nil)
 
-// ErrUnsupported is returned off Windows.
+// ErrUnsupported is returned where there is no print system to use.
 var ErrUnsupported = errors.New("USB printers need the Windows print spooler")
 
 func (w *Writer) Write(ctx context.Context, data []byte) (printer.Result, error) {

@@ -1,6 +1,7 @@
 package queue
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"path/filepath"
@@ -147,9 +148,17 @@ func TestStrictOrderPerPrinter(t *testing.T) {
 	for _, id := range []string{"j1", "j2", "j3", "j4"} {
 		q.Submit(context.Background(), testJob(id, "p1"))
 	}
-	for _, want := range []string{"j1", "j2", "j3", "j4"} {
-		if got := rec.next(t).id; got != want {
-			t.Fatalf("reported %s, want %s next", got, want)
+	// Outcomes are reported concurrently (a slow report never holds up the
+	// next ticket), so their order isn't the printing order: check the
+	// printer's own calls.
+	for range 4 {
+		rec.next(t)
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for i, want := range []string{"j1", "j2", "j3", "j4"} {
+		if !bytes.Contains(w.calls[i], []byte(want)) {
+			t.Fatalf("ticket %d printed isn't %s", i+1, want)
 		}
 	}
 }

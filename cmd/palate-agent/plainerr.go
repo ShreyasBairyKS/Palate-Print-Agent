@@ -53,7 +53,6 @@ const (
 	sayNewCode   = "In the Palate portal, choose \"Add a till\" for a new code and type it in."
 	sayAddress   = "Use the address setup fills in (" + config.DefaultServer + "), or the one Palate gave you."
 	sayInternet  = "Check this till is connected to the internet: open any website in the browser."
-	sayAdmin     = "Close this window, double-click palate-agent.exe again, and choose Yes when Windows asks."
 	sayPrinterOn = "Check the printer is switched on, its cable is in, and the IP address is right (hold the feed button while switching it on to print its address)."
 )
 

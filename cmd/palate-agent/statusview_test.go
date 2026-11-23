@@ -93,7 +93,7 @@ func TestStatusViewAgentNotRunning(t *testing.T) {
 		{"stopped", f, nil, "stopped", "The print agent isn't running"},
 		{"stuck", status.File{UpdatedAt: now.Add(-5 * time.Minute)}, nil, "running", "The print agent isn't responding"},
 		{"no file yet", status.File{}, os.ErrNotExist, "running", "Waiting for the print agent to report..."},
-		{"old install", status.File{}, os.ErrPermission, "running", "This Windows account can't read the printer status"},
+		{"old install", status.File{}, os.ErrPermission, "running", "This " + osName + " account can't read the printer status"},
 	}
 	for _, c := range cases {
 		v := describeStatus(c.f, c.err, c.svc, now)
